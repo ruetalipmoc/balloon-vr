@@ -3,6 +3,7 @@
 #include "sim_math.h"
 
 #include <math.h>
+#include <string.h>
 
 #define TERRAIN_SEED 0xB4110005u
 
@@ -100,5 +101,90 @@ float Terrain_GroundAt(float x, float z)
     h = Maxf(h, Terrain_Height(x - o, z));
     h = Maxf(h, Terrain_Height(x, z + o));
     h = Maxf(h, Terrain_Height(x, z - o));
+    if (h < TERRAIN_WATER) return TERRAIN_WATER;
     return h;
+}
+
+int Terrain_LodForDistance(float distMeters)
+{
+    if (distMeters < 90.0f) return 0;
+    if (distMeters < 180.0f) return 1;
+    if (distMeters < 320.0f) return 2;
+    return 3;
+}
+
+int Terrain_GridForLod(int lod)
+{
+    switch (lod) {
+        case 0: return 16;
+        case 1: return 8;
+        case 2: return 2;
+        default: return 1;
+    }
+}
+
+static int ChunkLod(int cx, int cz, float viewX, float viewZ)
+{
+    float mx = ((float)cx + 0.5f) * TERRAIN_CHUNK_SIZE;
+    float mz = ((float)cz + 0.5f) * TERRAIN_CHUNK_SIZE;
+    return Terrain_LodForDistance(hypotf(mx - viewX, mz - viewZ));
+}
+
+/* Lerp this border sample onto the coarser edge running along Z (x fixed)
+ * or along X (z fixed). Returns 0 when the sample already is a coarse vertex. */
+static int SnapToCoarse(float fixed, float along, float origin, float size, int coarse,
+                        int alongX, TerrainSample* s)
+{
+    float cstep = size / (float)coarse;
+    float u = (along - origin) / cstep;
+    int i = (int)floorf(u);
+    if (i < 0) i = 0;
+    if (i >= coarse) i = coarse - 1;
+    float f = u - (float)i;
+    if (f < 0.0001f || f > 0.9999f) return 0;
+    float a = origin + (float)i * cstep;
+    float b = a + cstep;
+    if (alongX) {
+        s->ax = a;
+        s->az = fixed;
+        s->bx = b;
+        s->bz = fixed;
+    } else {
+        s->ax = fixed;
+        s->az = a;
+        s->bx = fixed;
+        s->bz = b;
+    }
+    s->t = f;
+    s->y = Lerpf(Terrain_Height(s->ax, s->az), Terrain_Height(s->bx, s->bz), f);
+    s->snapped = 1;
+    return 1;
+}
+
+TerrainSample Terrain_Sample(int jx, int jz, int grid, float x0, float z0, float size,
+                             int cx, int cz, float viewX, float viewZ)
+{
+    TerrainSample s;
+    memset(&s, 0, sizeof(s));
+    float step = size / (float)grid;
+    s.x = x0 + (float)jx * step;
+    s.z = z0 + (float)jz * step;
+    s.y = Terrain_Height(s.x, s.z);
+
+    int onX = (jx == 0 || jx == grid);
+    int onZ = (jz == 0 || jz == grid);
+    /* Corners belong to every grid, so they already coincide. */
+    if (!onX && !onZ) return s;
+    if (onX && onZ) return s;
+
+    int neighbor = grid;
+    if (jx == 0) neighbor = Terrain_GridForLod(ChunkLod(cx - 1, cz, viewX, viewZ));
+    else if (jx == grid) neighbor = Terrain_GridForLod(ChunkLod(cx + 1, cz, viewX, viewZ));
+    else if (jz == 0) neighbor = Terrain_GridForLod(ChunkLod(cx, cz - 1, viewX, viewZ));
+    else neighbor = Terrain_GridForLod(ChunkLod(cx, cz + 1, viewX, viewZ));
+    if (neighbor >= grid) return s;
+
+    if (onX) SnapToCoarse(s.x, s.z, z0, size, neighbor, 0, &s);
+    else SnapToCoarse(s.z, s.x, x0, size, neighbor, 1, &s);
+    return s;
 }

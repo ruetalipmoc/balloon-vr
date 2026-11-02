@@ -6,24 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-int Terrain_LodForDistance(float distMeters)
-{
-    if (distMeters < 90.0f) return 0;    /* 16x16 quads */
-    if (distMeters < 180.0f) return 1;   /* 6x6 */
-    if (distMeters < 320.0f) return 2;   /* 2x2 */
-    return 3;                            /* a single quad */
-}
-
-static int GridForLod(int lod)
-{
-    switch (lod) {
-        case 0: return 16;
-        case 1: return 6;
-        case 2: return 2;
-        default: return 1;
-    }
-}
-
 static unsigned int CellHash(int x, int z)
 {
     unsigned int h = (unsigned int)x * 2246822519u ^ (unsigned int)z * 3266489917u;
@@ -75,6 +57,41 @@ static Color GroundColor(float x, float z, float h, float slopeY, float fog)
     }
     if (h < TERRAIN_WATER) c = (Color){ 46, 110, 150, 255 };
     return LerpColor(c, sky, fog);
+}
+
+static void VertexShade(float x, float y, float z, float viewX, float viewZ,
+                        float* nx, float* ny, float* nz, Color* c)
+{
+    Terrain_Normal(x, z, nx, ny, nz);
+    float dist = hypotf(x - viewX, z - viewZ);
+    float fog = (dist - 70.0f) / 380.0f;
+    if (fog < 0.0f) fog = 0.0f;
+    if (fog > 0.82f) fog = 0.82f;
+    *c = GroundColor(x, z, y, *ny, fog);
+}
+
+/* Border samples that were pulled onto a coarser edge inherit that edge's
+ * colour and normal, so the two LODs shade as one surface. */
+static void SampleShade(const TerrainSample* s, float viewX, float viewZ,
+                        float* nx, float* ny, float* nz, Color* c)
+{
+    if (!s->snapped) {
+        VertexShade(s->x, s->y, s->z, viewX, viewZ, nx, ny, nz, c);
+        return;
+    }
+    float nax, nay, naz, nbx, nby, nbz;
+    Color ca, cb;
+    VertexShade(s->ax, Terrain_Height(s->ax, s->az), s->az, viewX, viewZ, &nax, &nay, &naz, &ca);
+    VertexShade(s->bx, Terrain_Height(s->bx, s->bz), s->bz, viewX, viewZ, &nbx, &nby, &nbz, &cb);
+    float vx = nax + (nbx - nax) * s->t;
+    float vy = nay + (nby - nay) * s->t;
+    float vz = naz + (nbz - naz) * s->t;
+    float len = sqrtf(vx * vx + vy * vy + vz * vz);
+    if (len < 1.0e-5f) len = 1.0f;
+    *nx = vx / len;
+    *ny = vy / len;
+    *nz = vz / len;
+    *c = LerpColor(ca, cb, s->t);
 }
 
 static void PushVert(float* v, float* n, unsigned char* col, float* uv, int i,
@@ -162,11 +179,10 @@ static void AddProps(int cx, int cz, float x0, float z0, float size, ChunkMesh* 
 int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh* out)
 {
     memset(out, 0, sizeof(*out));
-    int grid = GridForLod(lod);
+    int grid = Terrain_GridForLod(lod);
     float size = TERRAIN_CHUNK_SIZE;
     float x0 = (float)cx * size;
     float z0 = (float)cz * size;
-    float step = size / (float)grid;
 
     int quads = grid * grid;
     int groundVerts = quads * 6;
@@ -176,55 +192,38 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
     float* gu = (float*)MemAlloc((unsigned int)groundVerts * 2 * sizeof(float));
 
     int waterQuads = 0;
-    /* Count water cells first so the water mesh can be exact. */
     for (int jz = 0; jz < grid; jz++) {
         for (int jx = 0; jx < grid; jx++) {
-            float xa = x0 + (float)jx * step;
-            float za = z0 + (float)jz * step;
-            float h00 = Terrain_Height(xa, za);
-            float h10 = Terrain_Height(xa + step, za);
-            float h11 = Terrain_Height(xa + step, za + step);
-            float h01 = Terrain_Height(xa, za + step);
-            if (h00 < TERRAIN_WATER || h10 < TERRAIN_WATER || h11 < TERRAIN_WATER || h01 < TERRAIN_WATER)
+            TerrainSample s00 = Terrain_Sample(jx, jz, grid, x0, z0, size, cx, cz, viewX, viewZ);
+            TerrainSample s10 = Terrain_Sample(jx + 1, jz, grid, x0, z0, size, cx, cz, viewX, viewZ);
+            TerrainSample s11 = Terrain_Sample(jx + 1, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ);
+            TerrainSample s01 = Terrain_Sample(jx, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ);
+            if (s00.y < TERRAIN_WATER || s10.y < TERRAIN_WATER || s11.y < TERRAIN_WATER || s01.y < TERRAIN_WATER)
                 waterQuads++;
         }
     }
 
-    float cxm = x0 + size * 0.5f;
-    float czm = z0 + size * 0.5f;
-    float dist = hypotf(cxm - viewX, czm - viewZ);
-    float fog = (dist - 70.0f) / 380.0f;
-    if (fog < 0.0f) fog = 0.0f;
-    if (fog > 0.82f) fog = 0.82f;
-
     int gi = 0;
     for (int jz = 0; jz < grid; jz++) {
         for (int jx = 0; jx < grid; jx++) {
-            float xa = x0 + (float)jx * step;
-            float za = z0 + (float)jz * step;
-            float xb = xa + step;
-            float zb = za + step;
-            float h00 = Terrain_Height(xa, za);
-            float h10 = Terrain_Height(xb, za);
-            float h11 = Terrain_Height(xb, zb);
-            float h01 = Terrain_Height(xa, zb);
-            float mx = (xa + xb) * 0.5f;
-            float mz = (za + zb) * 0.5f;
-            float mh = (h00 + h10 + h11 + h01) * 0.25f;
-            float nx, ny, nz;
-            Terrain_Normal(mx, mz, &nx, &ny, &nz);
-            Color col = GroundColor(mx, mz, mh, ny, fog);
-
-            float px[4] = { xa, xb, xb, xa };
-            float pz[4] = { za, za, zb, zb };
-            float py[4] = { h00, h10, h11, h01 };
+            TerrainSample corner[4] = {
+                Terrain_Sample(jx, jz, grid, x0, z0, size, cx, cz, viewX, viewZ),
+                Terrain_Sample(jx + 1, jz, grid, x0, z0, size, cx, cz, viewX, viewZ),
+                Terrain_Sample(jx + 1, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ),
+                Terrain_Sample(jx, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ)
+            };
+            float nx[4], ny[4], nz[4];
+            Color col[4];
+            for (int k = 0; k < 4; k++)
+                SampleShade(&corner[k], viewX, viewZ, &nx[k], &ny[k], &nz[k], &col[k]);
             /* Winding faces up (right-handed Y-up). The other order is culled
              * from the basket, which sits above the mesh. */
             int tris[2][3] = { { 0, 2, 1 }, { 0, 3, 2 } };
             for (int t = 0; t < 2; t++) {
                 for (int k = 0; k < 3; k++) {
                     int id = tris[t][k];
-                    PushVert(gv, gn, gc, gu, gi, px[id], py[id], pz[id], nx, ny, nz, col);
+                    PushVert(gv, gn, gc, gu, gi, corner[id].x, corner[id].y, corner[id].z,
+                             nx[id], ny[id], nz[id], col[id]);
                     gi++;
                 }
             }
@@ -238,32 +237,31 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
         float* wn = (float*)MemAlloc((unsigned int)wvCount * 3 * sizeof(float));
         unsigned char* wc = (unsigned char*)MemAlloc((unsigned int)wvCount * 4);
         float* wu = (float*)MemAlloc((unsigned int)wvCount * 2 * sizeof(float));
-        Color water = { 64, 150, 196, 168 };
-        water = LerpColor(water, (Color){ 186, 214, 228, 168 }, fog * 0.7f);
-        water.a = 170;
         int wi = 0;
         for (int jz = 0; jz < grid; jz++) {
             for (int jx = 0; jx < grid; jx++) {
-                float xa = x0 + (float)jx * step;
-                float za = z0 + (float)jz * step;
-                float xb = xa + step;
-                float zb = za + step;
-                float h00 = Terrain_Height(xa, za);
-                float h10 = Terrain_Height(xb, za);
-                float h11 = Terrain_Height(xb, zb);
-                float h01 = Terrain_Height(xa, zb);
-                if (!(h00 < TERRAIN_WATER || h10 < TERRAIN_WATER || h11 < TERRAIN_WATER || h01 < TERRAIN_WATER))
+                TerrainSample corner[4] = {
+                    Terrain_Sample(jx, jz, grid, x0, z0, size, cx, cz, viewX, viewZ),
+                    Terrain_Sample(jx + 1, jz, grid, x0, z0, size, cx, cz, viewX, viewZ),
+                    Terrain_Sample(jx + 1, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ),
+                    Terrain_Sample(jx, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ)
+                };
+                if (!(corner[0].y < TERRAIN_WATER || corner[1].y < TERRAIN_WATER ||
+                      corner[2].y < TERRAIN_WATER || corner[3].y < TERRAIN_WATER))
                     continue;
-                float y = TERRAIN_WATER;
-                float px[4] = { xa, xb, xb, xa };
-                float pz[4] = { za, za, zb, zb };
-                /* Winding faces up (right-handed Y-up). The other order is culled
-             * from the basket, which sits above the mesh. */
-            int tris[2][3] = { { 0, 2, 1 }, { 0, 3, 2 } };
+                int tris[2][3] = { { 0, 2, 1 }, { 0, 3, 2 } };
                 for (int t = 0; t < 2; t++) {
                     for (int k = 0; k < 3; k++) {
                         int id = tris[t][k];
-                        PushVert(wv, wn, wc, wu, wi, px[id], y, pz[id], 0, 1, 0, water);
+                        float dist = hypotf(corner[id].x - viewX, corner[id].z - viewZ);
+                        float fog = (dist - 70.0f) / 380.0f;
+                        if (fog < 0.0f) fog = 0.0f;
+                        if (fog > 0.82f) fog = 0.82f;
+                        Color water = LerpColor((Color){ 64, 150, 196, 255 },
+                                                (Color){ 186, 214, 228, 255 }, fog * 0.7f);
+                        water.a = 170;
+                        PushVert(wv, wn, wc, wu, wi, corner[id].x, TERRAIN_WATER, corner[id].z,
+                                 0, 1, 0, water);
                         wi++;
                     }
                 }

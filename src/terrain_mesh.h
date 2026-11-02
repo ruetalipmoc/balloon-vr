@@ -1,5 +1,6 @@
 /* Chunk meshes with an aggressive distance LOD. Near chunks are faceted
- * hills; far chunks collapse to one or two quads tinted toward the sky. */
+ * hills; far chunks collapse to one or two quads tinted toward the sky.
+ * Borders are stitched onto the coarser neighbour so LOD changes do not crack. */
 #ifndef BALLOON_TERRAIN_MESH_H
 #define BALLOON_TERRAIN_MESH_H
 
@@ -23,7 +24,6 @@ typedef struct ChunkMesh {
     int propCount;
 } ChunkMesh;
 
-int Terrain_LodForDistance(float distMeters);
 int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh* out);
 void ChunkMesh_Free(ChunkMesh* chunk);
 

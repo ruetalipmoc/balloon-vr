@@ -4,6 +4,7 @@
 #include "../src/terrain.h"
 #include "../src/wind.h"
 #include "../src/world.h"
+#include "../src/sim_math.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -31,6 +32,34 @@ static void TestWind(void)
     CHECK(delta > 0.2f);
     CHECK(Wind_Compass(0.0f)[0] == 'N');
     CHECK(Wind_Compass(1.5707963f)[0] == 'E');
+}
+
+static void TestSeams(void)
+{
+    float size = TERRAIN_CHUNK_SIZE;
+    /* Same LOD on both sides of x = 64: the border is the raw height field. */
+    TerrainSample same = Terrain_Sample(16, 3, 16, 0.0f, 0.0f, size, 0, 0, 32.0f, 32.0f);
+    CHECK(!same.snapped);
+    CHECK(fabsf(same.y - Terrain_Height(64.0f, 12.0f)) < 1.0e-3f);
+
+    /* View sits so chunk (0,0) is LOD 0 and chunk (1,0) is LOD 1. */
+    float viewX = -20.0f;
+    float viewZ = 32.0f;
+    CHECK(Terrain_GridForLod(Terrain_LodForDistance(hypotf(32.0f - viewX, 0.0f))) == 16);
+    CHECK(Terrain_GridForLod(Terrain_LodForDistance(hypotf(96.0f - viewX, 0.0f))) == 8);
+
+    TerrainSample fine = Terrain_Sample(16, 1, 16, 0.0f, 0.0f, size, 0, 0, viewX, viewZ);
+    float expect = Lerpf(Terrain_Height(64.0f, 0.0f), Terrain_Height(64.0f, 8.0f), 0.5f);
+    CHECK(fine.snapped);
+    CHECK(fabsf(fine.y - expect) < 1.0e-3f);
+
+    /* The coarser chunk keeps its own samples; shared vertices agree. */
+    TerrainSample coarse = Terrain_Sample(0, 1, 8, size, 0.0f, size, 1, 0, viewX, viewZ);
+    CHECK(!coarse.snapped);
+    CHECK(fabsf(coarse.y - Terrain_Height(64.0f, 8.0f)) < 1.0e-3f);
+    TerrainSample shared = Terrain_Sample(16, 2, 16, 0.0f, 0.0f, size, 0, 0, viewX, viewZ);
+    CHECK(!shared.snapped);
+    CHECK(fabsf(shared.y - coarse.y) < 1.0e-3f);
 }
 
 static void TestTerrain(void)
@@ -109,6 +138,7 @@ int main(void)
 {
     TestWind();
     TestTerrain();
+    TestSeams();
     TestBalloon();
     TestHandles();
     if (g_fails) {

@@ -120,6 +120,32 @@ static void PushTri(float* v, float* n, unsigned char* c, float* uv, int* i,
     }
 }
 
+static void PushTriN(float* v, float* n, unsigned char* c, float* uv, int* i,
+                      Vector3 a, Vector3 b, Vector3 d,
+                      Vector3 na, Vector3 nb, Vector3 nd,
+                      Color ca, Color cb, Color cd)
+{
+    Vector3 p[3] = { a, b, d };
+    Vector3 pn[3] = { na, nb, nd };
+    Color pc[3] = { ca, cb, cd };
+    for (int k = 0; k < 3; k++) {
+        int idx = *i;
+        v[idx * 3 + 0] = p[k].x;
+        v[idx * 3 + 1] = p[k].y;
+        v[idx * 3 + 2] = p[k].z;
+        n[idx * 3 + 0] = pn[k].x;
+        n[idx * 3 + 1] = pn[k].y;
+        n[idx * 3 + 2] = pn[k].z;
+        c[idx * 4 + 0] = pc[k].r;
+        c[idx * 4 + 1] = pc[k].g;
+        c[idx * 4 + 2] = pc[k].b;
+        c[idx * 4 + 3] = pc[k].a;
+        uv[idx * 2 + 0] = 0;
+        uv[idx * 2 + 1] = 0;
+        (*i)++;
+    }
+}
+
 static float EnvelopeRadius(float t)
 {
     /* t = 0 at the crown, t = 1 at the mouth. Fat teardrop, pinched at both ends. */
@@ -131,6 +157,41 @@ static float EnvelopeRadius(float t)
     }
     if (t < 0.06f) r = Lerpf(0.9f, r, t / 0.06f);
     return r;
+}
+
+static Vector3 EnvelopePoint(float t, float a)
+{
+    float r = EnvelopeRadius(t);
+    float y = Lerpf(ENVELOPE_TOP_Y, ENVELOPE_MOUTH_Y, t);
+    return (Vector3){ cosf(a) * r, y, sinf(a) * r };
+}
+
+/* Outward normal shared by every gore that meets this vertex, so the
+ * cloth stays one surface instead of a stack of flat panels. */
+static Vector3 EnvelopeNormal(float t, float a)
+{
+    const float e = 0.01f;
+    float t0 = t - e;
+    float t1 = t + e;
+    if (t0 < 0.0f) t0 = 0.0f;
+    if (t1 > 1.0f) t1 = 1.0f;
+    float r0 = EnvelopeRadius(t0);
+    float r1 = EnvelopeRadius(t1);
+    float y0 = Lerpf(ENVELOPE_TOP_Y, ENVELOPE_MOUTH_Y, t0);
+    float y1 = Lerpf(ENVELOPE_TOP_Y, ENVELOPE_MOUTH_Y, t1);
+    float dr = r1 - r0;
+    float dy = y1 - y0;
+    float nr = -dy;
+    float ny = dr;
+    float len = sqrtf(nr * nr + ny * ny);
+    if (len < 1.0e-5f) {
+        nr = 1.0f;
+        ny = 0.0f;
+    } else {
+        nr /= len;
+        ny /= len;
+    }
+    return (Vector3){ nr * cosf(a), ny, nr * sinf(a) };
 }
 
 static Mesh MakeEnvelope(void)
@@ -146,20 +207,20 @@ static Mesh MakeEnvelope(void)
     for (int s = 0; s < stacks; s++) {
         float t0 = (float)s / (float)stacks;
         float t1 = (float)(s + 1) / (float)stacks;
-        float y0 = Lerpf(ENVELOPE_TOP_Y, ENVELOPE_MOUTH_Y, t0);
-        float y1 = Lerpf(ENVELOPE_TOP_Y, ENVELOPE_MOUTH_Y, t1);
-        float r0 = EnvelopeRadius(t0);
-        float r1 = EnvelopeRadius(t1);
         for (int k = 0; k < slices; k++) {
             float a0 = (float)k / (float)slices * 2.0f * (float)M_PI;
             float a1 = (float)(k + 1) / (float)slices * 2.0f * (float)M_PI;
-            Vector3 p00 = { cosf(a0) * r0, y0, sinf(a0) * r0 };
-            Vector3 p10 = { cosf(a1) * r0, y0, sinf(a1) * r0 };
-            Vector3 p11 = { cosf(a1) * r1, y1, sinf(a1) * r1 };
-            Vector3 p01 = { cosf(a0) * r1, y1, sinf(a0) * r1 };
+            Vector3 p00 = EnvelopePoint(t0, a0);
+            Vector3 p10 = EnvelopePoint(t0, a1);
+            Vector3 p11 = EnvelopePoint(t1, a1);
+            Vector3 p01 = EnvelopePoint(t1, a0);
+            Vector3 n00 = EnvelopeNormal(t0, a0);
+            Vector3 n10 = EnvelopeNormal(t0, a1);
+            Vector3 n11 = EnvelopeNormal(t1, a1);
+            Vector3 n01 = EnvelopeNormal(t1, a0);
             Color col = StripeColor(k / 2);
-            PushTri(v, n, c, uv, &i, p00, p10, p11, col);
-            PushTri(v, n, c, uv, &i, p00, p11, p01, col);
+            PushTriN(v, n, c, uv, &i, p00, p10, p11, n00, n10, n11, col, col, col);
+            PushTriN(v, n, c, uv, &i, p00, p11, p01, n00, n11, n01, col, col, col);
         }
     }
     return MakeFlatMesh(i, v, n, c, uv);
@@ -212,8 +273,10 @@ static Mesh MakeSky(void)
         float y1 = cosf(p1 * (float)M_PI * 0.5f) * radius;
         float r0 = sinf(p0 * (float)M_PI * 0.5f) * radius;
         float r1 = sinf(p1 * (float)M_PI * 0.5f) * radius;
-        Color face = t0 < 0.35f ? LerpColor(zenith, high, t0 / 0.35f)
-                                : LerpColor(high, horizon, (t0 - 0.35f) / 0.65f);
+        Color c0 = t0 < 0.35f ? LerpColor(zenith, high, t0 / 0.35f)
+                              : LerpColor(high, horizon, (t0 - 0.35f) / 0.65f);
+        Color c1 = t1 < 0.35f ? LerpColor(zenith, high, t1 / 0.35f)
+                              : LerpColor(high, horizon, (t1 - 0.35f) / 0.65f);
         for (int k = 0; k < slices; k++) {
             float a0 = (float)k / (float)slices * 2.0f * (float)M_PI;
             float a1 = (float)(k + 1) / (float)slices * 2.0f * (float)M_PI;
@@ -221,9 +284,14 @@ static Mesh MakeSky(void)
             Vector3 b = { cosf(a1) * r0, y0, sinf(a1) * r0 };
             Vector3 d = { cosf(a1) * r1, y1, sinf(a1) * r1 };
             Vector3 e = { cosf(a0) * r1, y1, sinf(a0) * r1 };
-            /* Winding faces inward so the dome is visible from the basket. */
-            PushTri(v, n, c, uv, &i, a, e, d, face);
-            PushTri(v, n, c, uv, &i, a, d, b, face);
+            Vector3 na = Vector3Normalize(Vector3Negate(a));
+            Vector3 nb = Vector3Normalize(Vector3Negate(b));
+            Vector3 nd = Vector3Normalize(Vector3Negate(d));
+            Vector3 ne = Vector3Normalize(Vector3Negate(e));
+            /* Inward winding. Colours are stored on the vertices so the two
+             * bands that share a ring interpolate the same gradient. */
+            PushTriN(v, n, c, uv, &i, a, e, d, na, ne, nd, c0, c1, c1);
+            PushTriN(v, n, c, uv, &i, a, d, b, na, nd, nb, c0, c1, c0);
         }
     }
     return MakeFlatMesh(i, v, n, c, uv);
@@ -477,20 +545,113 @@ static void UpdateChunks(Scene* s)
     }
 }
 
+static Vector3 TubePerp(Vector3 d)
+{
+    Vector3 a = (fabsf(d.y) < 0.85f) ? (Vector3){ 0.0f, 1.0f, 0.0f } : (Vector3){ 1.0f, 0.0f, 0.0f };
+    return Vector3Normalize(Vector3CrossProduct(d, a));
+}
+
+/* One tube through every point. Separate cylinders leave a disc, and a
+ * lighting break, at each joint. */
+static void DrawTube(const Vector3* pts, int count, float radius, int sides, Color color, int closed)
+{
+    if (count < 2 || sides < 3 || radius <= 0.0f) return;
+    if (count > 40) count = 40;
+
+    Vector3 tangent[40];
+    Vector3 side[40];
+    Vector3 up[40];
+    for (int i = 0; i < count; i++) {
+        Vector3 d;
+        if (!closed && i == 0) d = Vector3Subtract(pts[1], pts[0]);
+        else if (!closed && i == count - 1) d = Vector3Subtract(pts[i], pts[i - 1]);
+        else {
+            int ip = (i - 1 + count) % count;
+            int in = (i + 1) % count;
+            Vector3 a = Vector3Subtract(pts[i], pts[ip]);
+            Vector3 b = Vector3Subtract(pts[in], pts[i]);
+            if (Vector3Length(a) > 1.0e-5f) a = Vector3Normalize(a);
+            if (Vector3Length(b) > 1.0e-5f) b = Vector3Normalize(b);
+            d = Vector3Add(a, b);
+        }
+        tangent[i] = (Vector3Length(d) < 1.0e-5f) ? (Vector3){ 0.0f, 1.0f, 0.0f } : Vector3Normalize(d);
+    }
+
+    side[0] = TubePerp(tangent[0]);
+    up[0] = Vector3Normalize(Vector3CrossProduct(tangent[0], side[0]));
+    for (int i = 1; i < count; i++) {
+        Vector3 s = Vector3Subtract(side[i - 1], Vector3Scale(tangent[i], Vector3DotProduct(side[i - 1], tangent[i])));
+        if (Vector3Length(s) < 1.0e-5f) s = TubePerp(tangent[i]);
+        else s = Vector3Normalize(s);
+        side[i] = s;
+        up[i] = Vector3Normalize(Vector3CrossProduct(tangent[i], side[i]));
+    }
+
+    rlBegin(RL_TRIANGLES);
+    rlColor4ub(color.r, color.g, color.b, color.a);
+    int segments = closed ? count : count - 1;
+    for (int i = 0; i < segments; i++) {
+        int j = (i + 1) % count;
+        for (int s = 0; s < sides; s++) {
+            int s1 = (s + 1) % sides;
+            float a0 = (float)s / (float)sides * 2.0f * (float)M_PI;
+            float a1 = (float)s1 / (float)sides * 2.0f * (float)M_PI;
+            Vector3 r0 = Vector3Add(Vector3Scale(side[i], cosf(a0) * radius), Vector3Scale(up[i], sinf(a0) * radius));
+            Vector3 r1 = Vector3Add(Vector3Scale(side[i], cosf(a1) * radius), Vector3Scale(up[i], sinf(a1) * radius));
+            Vector3 q0 = Vector3Add(Vector3Scale(side[j], cosf(a0) * radius), Vector3Scale(up[j], sinf(a0) * radius));
+            Vector3 q1 = Vector3Add(Vector3Scale(side[j], cosf(a1) * radius), Vector3Scale(up[j], sinf(a1) * radius));
+            Vector3 p0 = Vector3Add(pts[i], r0);
+            Vector3 p1 = Vector3Add(pts[i], r1);
+            Vector3 p2 = Vector3Add(pts[j], q0);
+            Vector3 p3 = Vector3Add(pts[j], q1);
+            Vector3 n0 = Vector3Scale(r0, 1.0f / radius);
+            Vector3 n1 = Vector3Scale(r1, 1.0f / radius);
+            Vector3 n2 = Vector3Scale(q0, 1.0f / radius);
+            Vector3 n3 = Vector3Scale(q1, 1.0f / radius);
+            rlNormal3f(n0.x, n0.y, n0.z); rlVertex3f(p0.x, p0.y, p0.z);
+            rlNormal3f(n1.x, n1.y, n1.z); rlVertex3f(p1.x, p1.y, p1.z);
+            rlNormal3f(n3.x, n3.y, n3.z); rlVertex3f(p3.x, p3.y, p3.z);
+            rlNormal3f(n2.x, n2.y, n2.z); rlVertex3f(p2.x, p2.y, p2.z);
+            rlNormal3f(n0.x, n0.y, n0.z); rlVertex3f(p0.x, p0.y, p0.z);
+            rlNormal3f(n3.x, n3.y, n3.z); rlVertex3f(p3.x, p3.y, p3.z);
+        }
+    }
+    if (!closed) {
+        int last = count - 1;
+        for (int s = 0; s < sides; s++) {
+            int s1 = (s + 1) % sides;
+            float a0 = (float)s / (float)sides * 2.0f * (float)M_PI;
+            float a1 = (float)s1 / (float)sides * 2.0f * (float)M_PI;
+            Vector3 p0 = Vector3Add(pts[0], Vector3Add(Vector3Scale(side[0], cosf(a0) * radius), Vector3Scale(up[0], sinf(a0) * radius)));
+            Vector3 p1 = Vector3Add(pts[0], Vector3Add(Vector3Scale(side[0], cosf(a1) * radius), Vector3Scale(up[0], sinf(a1) * radius)));
+            rlNormal3f(-tangent[0].x, -tangent[0].y, -tangent[0].z);
+            rlVertex3f(pts[0].x, pts[0].y, pts[0].z);
+            rlVertex3f(p1.x, p1.y, p1.z);
+            rlVertex3f(p0.x, p0.y, p0.z);
+            Vector3 q0 = Vector3Add(pts[last], Vector3Add(Vector3Scale(side[last], cosf(a0) * radius), Vector3Scale(up[last], sinf(a0) * radius)));
+            Vector3 q1 = Vector3Add(pts[last], Vector3Add(Vector3Scale(side[last], cosf(a1) * radius), Vector3Scale(up[last], sinf(a1) * radius)));
+            rlNormal3f(tangent[last].x, tangent[last].y, tangent[last].z);
+            rlVertex3f(pts[last].x, pts[last].y, pts[last].z);
+            rlVertex3f(q0.x, q0.y, q0.z);
+            rlVertex3f(q1.x, q1.y, q1.z);
+        }
+    }
+    rlEnd();
+}
+
 static void DrawRope(Vector3 a, Vector3 b, float sag, float radius, Color color)
 {
-    Vector3 prev = a;
     const int n = 7;
-    for (int i = 1; i <= n; i++) {
+    Vector3 pts[8];
+    for (int i = 0; i <= n; i++) {
         float t = (float)i / (float)n;
-        Vector3 p = {
+        pts[i] = (Vector3){
             Lerpf(a.x, b.x, t),
             Lerpf(a.y, b.y, t) - sinf(t * (float)M_PI) * sag,
             Lerpf(a.z, b.z, t)
         };
-        DrawCylinderEx(prev, p, radius, radius, 5, color);
-        prev = p;
     }
+    DrawTube(pts, n + 1, radius, 5, color, 0);
 }
 
 static void DrawLabel(Texture2D tex, Vector3 pos, Vector3 eye)
@@ -629,20 +790,20 @@ static Vector3 BurnerValveTip(float pull01)
 
 static void DrawCoil(float cx, float cz, float y0, float y1, float radius, int turns, Color color)
 {
-    const int segPerTurn = 7;
+    const int segPerTurn = 8;
     int n = turns * segPerTurn;
-    Vector3 prev = { cx + radius, y0, cz };
-    for (int i = 1; i <= n; i++) {
+    Vector3 pts[40];
+    if (n + 1 > 40) n = 39;
+    for (int i = 0; i <= n; i++) {
         float t = (float)i / (float)n;
         float a = t * (float)turns * 2.0f * (float)M_PI;
-        Vector3 p = {
+        pts[i] = (Vector3){
             cx + cosf(a) * radius,
             Lerpf(y0, y1, t),
             cz + sinf(a) * radius
         };
-        DrawCylinderEx(prev, p, 0.016f, 0.016f, 5, color);
-        prev = p;
     }
+    DrawTube(pts, n + 1, 0.016f, 6, color, 0);
 }
 
 /* One tongue of the burner flame. `tip` already includes flicker-free aim;
@@ -837,14 +998,20 @@ static void DrawBasket(const Scene* s)
         DrawCube((Vector3){ -hx - 0.02f, stakeY, z }, 0.018f, stakeH, 0.026f, stake);
         DrawCube((Vector3){  hx + 0.02f, stakeY, z }, 0.018f, stakeH, 0.026f, stake);
     }
+    /* Corner blocks so the four walls meet instead of leaving a notch. */
+    DrawCube((Vector3){ -hx, stakeY, -hz }, 0.05f, stakeH, 0.05f, stake);
+    DrawCube((Vector3){  hx, stakeY, -hz }, 0.05f, stakeH, 0.05f, stake);
+    DrawCube((Vector3){  hx, stakeY,  hz }, 0.05f, stakeH, 0.05f, stake);
+    DrawCube((Vector3){ -hx, stakeY,  hz }, 0.05f, stakeH, 0.05f, stake);
     DrawCube((Vector3){ 0, BASKET_RIM_Y, 0 }, hx * 2.0f + 0.06f, 0.06f, hz * 2.0f + 0.06f, (Color){ 196, 148, 78, 255 });
     DrawGuardRail();
 
     Vector3 posts[4] = {
         { -hx, 0, -hz }, { hx, 0, -hz }, { hx, 0, hz }, { -hx, 0, hz }
     };
+    float postTop = FRAME_Y - 0.025f;
     for (int i = 0; i < 4; i++) {
-        DrawCube((Vector3){ posts[i].x, FRAME_Y * 0.5f, posts[i].z }, 0.06f, FRAME_Y, 0.06f, wood);
+        DrawCube((Vector3){ posts[i].x, postTop * 0.5f, posts[i].z }, 0.06f, postTop, 0.06f, wood);
     }
     DrawCube((Vector3){ 0, FRAME_Y, -hz }, hx * 2.0f, 0.05f, 0.05f, wood);
     DrawCube((Vector3){ 0, FRAME_Y, hz }, hx * 2.0f, 0.05f, 0.05f, wood);
@@ -880,14 +1047,13 @@ static void DrawHandle(const HandleState* h, Color color, int ring)
         DrawCylinderEx((Vector3){ x - 0.11f, y, z }, (Vector3){ x + 0.11f, y, z }, 0.022f, 0.022f, 8, color);
     } else {
         /* Green vent handle: a ring, so the two stay distinct without colour. */
-        const int n = 10;
-        Vector3 prev = { x + 0.09f, y, z };
-        for (int i = 1; i <= n; i++) {
+        const int n = 12;
+        Vector3 ring[12];
+        for (int i = 0; i < n; i++) {
             float a = (float)i / (float)n * 2.0f * (float)M_PI;
-            Vector3 p = { x + cosf(a) * 0.09f, y + sinf(a) * 0.09f, z };
-            DrawCylinderEx(prev, p, 0.016f, 0.016f, 5, color);
-            prev = p;
+            ring[i] = (Vector3){ x + cosf(a) * 0.09f, y + sinf(a) * 0.09f, z };
         }
+        DrawTube(ring, n, 0.016f, 5, color, 1);
     }
 }
 
