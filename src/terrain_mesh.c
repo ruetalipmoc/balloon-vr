@@ -1,5 +1,6 @@
 #include "terrain_mesh.h"
 
+#include "sim_math.h"
 #include "terrain.h"
 
 #include <math.h>
@@ -29,31 +30,75 @@ static Color LerpColor(Color a, Color b, float t)
 
 static Color GroundColor(float x, float z, float h, float slopeY, float fog)
 {
-    Color grassA = { 78, 168, 72, 255 };
-    Color grassB = { 52, 128, 64, 255 };
-    Color forest = { 36, 96, 52, 255 };
+    Color grassA = { 86, 166, 74, 255 };
+    Color grassB = { 58, 132, 62, 255 };
+    Color forestA = { 34, 92, 48, 255 };
+    Color forestB = { 24, 70, 40, 255 };
     Color sand = { 214, 196, 138, 255 };
     Color rock = { 142, 138, 128, 255 };
     Color snow = { 236, 242, 246, 255 };
     Color sky = { 186, 214, 228, 255 };
+    Color hedge = { 58, 104, 52, 255 };
+    Color asphalt = { 74, 78, 84, 255 };
+    Color crops[5] = {
+        { 206, 176, 64, 255 },
+        { 78, 154, 64, 255 },
+        { 158, 106, 64, 255 },
+        { 138, 174, 78, 255 },
+        { 220, 196, 62, 255 }
+    };
+    Color blocks[3] = {
+        { 168, 164, 156, 255 },
+        { 186, 178, 166, 255 },
+        { 150, 156, 162, 255 }
+    };
 
-    float moisture = Terrain_Moisture(x, z);
-    float n = Terrain_Height(x * 0.37f + 20.0f, z * 0.37f - 10.0f);
-    float patch = n - floorf(n);
-    Color grass = LerpColor(grassA, grassB, patch);
+    float patch = (float)(CellHash((int)floorf(x * 0.07f), (int)floorf(z * 0.07f)) & 255) / 255.0f;
+    int zone = Terrain_Zone(x, z);
+    Color c = LerpColor(grassA, grassB, patch);
 
-    Color c = grass;
-    if (moisture > 0.58f && h < 42.0f && slopeY > 0.82f) c = LerpColor(grass, forest, 0.65f);
-    if (h < 9.0f && moisture < 0.42f) c = LerpColor(sand, grass, h / 9.0f);
-    if (slopeY < 0.78f) {
-        float rockT = (0.78f - slopeY) / 0.28f;
-        if (rockT > 1.0f) rockT = 1.0f;
-        c = LerpColor(c, rock, rockT);
+    if (zone == TERRAIN_ZONE_FOREST) c = LerpColor(forestA, forestB, patch);
+    if (zone == TERRAIN_ZONE_HIGHLAND) c = LerpColor(grassB, forestA, 0.35f);
+
+    if (zone == TERRAIN_ZONE_FARM && h > TERRAIN_WATER + 1.2f) {
+        float gx = floorf(x / TERRAIN_FIELD);
+        float gz = floorf(z / TERRAIN_FIELD);
+        float u = x / TERRAIN_FIELD - gx;
+        float v = z / TERRAIN_FIELD - gz;
+        if (u < 0.07f || v < 0.07f) {
+            c = hedge;
+        } else {
+            c = crops[CellHash((int)gx, (int)gz) % 5u];
+        }
     }
-    if (h > 46.0f) {
-        float snowT = (h - 46.0f) / 16.0f;
-        if (snowT > 1.0f) snowT = 1.0f;
-        c = LerpColor(c, snow, snowT);
+
+    if (zone == TERRAIN_ZONE_CITY && h > TERRAIN_WATER + 1.0f) {
+        float bx = floorf(x / TERRAIN_CITY_BLOCK);
+        float bz = floorf(z / TERRAIN_CITY_BLOCK);
+        float u = x / TERRAIN_CITY_BLOCK - bx;
+        float v = z / TERRAIN_CITY_BLOCK - bz;
+        if (u < 0.18f || v < 0.18f) {
+            c = asphalt;
+        } else if ((CellHash((int)bx, (int)bz) % 11u) == 0u) {
+            c = LerpColor(grassA, grassB, 0.4f);
+        } else {
+            c = blocks[CellHash((int)bx + 3, (int)bz - 1) % 3u];
+        }
+    }
+
+    if (zone != TERRAIN_ZONE_FARM && zone != TERRAIN_ZONE_CITY && h < TERRAIN_WATER + 2.4f && h >= TERRAIN_WATER) {
+        c = LerpColor(sand, c, (h - TERRAIN_WATER) / 2.4f);
+    }
+    if (zone == TERRAIN_ZONE_HIGHLAND && slopeY < 0.88f) {
+        float rockT = (0.88f - slopeY) / 0.30f;
+        c = LerpColor(c, rock, Clampf(rockT, 0.0f, 1.0f));
+    } else if (zone != TERRAIN_ZONE_FARM && zone != TERRAIN_ZONE_CITY && slopeY < 0.70f) {
+        float rockT = (0.70f - slopeY) / 0.28f;
+        c = LerpColor(c, rock, Clampf(rockT, 0.0f, 1.0f));
+    }
+    if (h > 52.0f) {
+        float snowT = (h - 52.0f) / 18.0f;
+        c = LerpColor(c, snow, Clampf(snowT, 0.0f, 1.0f));
     }
     if (h < TERRAIN_WATER) c = (Color){ 46, 110, 150, 255 };
     return LerpColor(c, sky, fog);
@@ -64,9 +109,9 @@ static void VertexShade(float x, float y, float z, float viewX, float viewZ,
 {
     Terrain_Normal(x, z, nx, ny, nz);
     float dist = hypotf(x - viewX, z - viewZ);
-    float fog = (dist - 70.0f) / 380.0f;
+    float fog = (dist - 140.0f) / 520.0f;
     if (fog < 0.0f) fog = 0.0f;
-    if (fog > 0.82f) fog = 0.82f;
+    if (fog > 0.7f) fog = 0.7f;
     *c = GroundColor(x, z, y, *ny, fog);
 }
 
@@ -124,54 +169,104 @@ static int UploadFlat(Mesh* mesh, int vertCount, float* v, float* nrm, unsigned 
     return 1;
 }
 
-static void AddProps(int cx, int cz, float x0, float z0, float size, ChunkMesh* out)
+static void PushProp(ChunkMesh* out, int kind, float x, float y, float z, float yaw, float scale)
 {
+    if (out->propCount >= CHUNK_MAX_PROPS) return;
+    Prop* p = &out->props[out->propCount++];
+    p->kind = kind;
+    p->x = x;
+    p->y = y;
+    p->z = z;
+    p->yaw = yaw;
+    p->scale = scale;
+}
+
+/* Blocks whose centres fall in this chunk. Parks keep a tree instead of a roof. */
+static void AddCity(float x0, float z0, float size, ChunkMesh* out)
+{
+    const float block = TERRAIN_CITY_BLOCK;
+    int i0 = (int)floorf(x0 / block);
+    int i1 = (int)floorf((x0 + size - 0.01f) / block);
+    int k0 = (int)floorf(z0 / block);
+    int k1 = (int)floorf((z0 + size - 0.01f) / block);
+    for (int iz = k0; iz <= k1; iz++) {
+        for (int ix = i0; ix <= i1; ix++) {
+            if (out->propCount >= CHUNK_MAX_PROPS) return;
+            float px = ((float)ix + 0.5f) * block;
+            float pz = ((float)iz + 0.5f) * block;
+            if (px < x0 || pz < z0 || px >= x0 + size || pz >= z0 + size) continue;
+            if (Terrain_Zone(px, pz) != TERRAIN_ZONE_CITY) continue;
+            float py = Terrain_Height(px, pz);
+            if (py < TERRAIN_WATER + 1.0f) continue;
+            unsigned int h = CellHash(ix, iz);
+            if ((h % 11u) == 0u) {
+                PushProp(out, 0, px, py, pz, 0.0f, 1.35f);
+                continue;
+            }
+            int tower = (h % 5u) == 0u;
+            float scale = 1.1f + (float)(h % 100u) / 100.0f * 1.2f;
+            if (tower) scale += 0.7f;
+            PushProp(out, tower ? 6 : 5, px, py, pz, 0.0f, scale);
+        }
+    }
+}
+
+static void AddProps(int cx, int cz, float x0, float z0, float size, int lod, ChunkMesh* out)
+{
+    (void)cx;
+    (void)cz;
     out->propCount = 0;
-    const int cells = 4;
+    AddCity(x0, z0, size, out);
+    if (lod > 1) return;
+
+    const int cells = 5;
     float cell = size / (float)cells;
     for (int jz = 0; jz < cells; jz++) {
         for (int jx = 0; jx < cells; jx++) {
             if (out->propCount >= CHUNK_MAX_PROPS) return;
-            int wx = cx * 16 + jx;
-            int wz = cz * 16 + jz;
+            int wx = (int)floorf(x0 / cell) + jx;
+            int wz = (int)floorf(z0 / cell) + jz;
             unsigned int h = CellHash(wx, wz);
-            float px = x0 + ((float)jx + 0.2f + (float)(h & 255) / 255.0f * 0.6f) * cell;
-            float pz = z0 + ((float)jz + 0.2f + (float)((h >> 8) & 255) / 255.0f * 0.6f) * cell;
+            if (lod > 0 && (h % 3u) != 0u) continue;
+            float px = x0 + ((float)jx + 0.18f + (float)(h & 255) / 255.0f * 0.64f) * cell;
+            float pz = z0 + ((float)jz + 0.18f + (float)((h >> 8) & 255) / 255.0f * 0.64f) * cell;
             float py = Terrain_Height(px, pz);
-            if (py < TERRAIN_WATER + 0.4f) continue;
+            if (py < TERRAIN_WATER + 0.6f) continue;
             float nx, ny, nz;
             Terrain_Normal(px, pz, &nx, &ny, &nz);
-            if (ny < 0.86f) {
-                if ((h % 5u) != 0u) continue;
-                Prop* p = &out->props[out->propCount++];
-                p->kind = 2;
-                p->x = px;
-                p->y = py;
-                p->z = pz;
-                p->yaw = (float)(h % 360u);
-                p->scale = 0.6f + (float)(h % 100u) / 100.0f * 1.4f;
+            int zone = Terrain_Zone(px, pz);
+            float scale = 0.8f + (float)((h >> 12) % 100u) / 100.0f * 0.85f;
+
+            if (zone == TERRAIN_ZONE_CITY) continue;
+            if (zone == TERRAIN_ZONE_FARM) {
+                if (ny < 0.9f) continue;
+                if ((h % 53u) == 0u) PushProp(out, 4, px, py, pz, 0.0f, 2.6f);
+                else if ((h % 17u) == 0u) PushProp(out, 0, px, py, pz, (float)(h % 360u), scale);
                 continue;
             }
-            float moisture = Terrain_Moisture(px, pz);
-            if ((h % 23u) == 0u && moisture < 0.7f && py < 28.0f && py > TERRAIN_WATER + 1.0f) {
-                Prop* p = &out->props[out->propCount++];
-                p->kind = 3;
-                p->x = px;
-                p->y = py;
-                p->z = pz;
-                p->yaw = (float)((h >> 4) % 180u);
-                p->scale = 1.0f;
+            if (ny < 0.84f) {
+                if (zone == TERRAIN_ZONE_HIGHLAND && (h % 3u) == 0u)
+                    PushProp(out, 2, px, py, pz, (float)(h % 360u), 0.7f + scale);
                 continue;
             }
-            if (moisture < 0.48f) continue;
-            if ((h % 3u) == 0u) continue;
-            Prop* p = &out->props[out->propCount++];
-            p->kind = (moisture > 0.72f) ? 1 : 0;
-            p->x = px;
-            p->y = py;
-            p->z = pz;
-            p->yaw = (float)(h % 360u);
-            p->scale = 0.75f + (float)((h >> 12) % 100u) / 100.0f * 0.9f;
+            if (zone == TERRAIN_ZONE_FOREST) {
+                if ((h % 5u) == 0u) continue;
+                float tree = 2.4f + (float)((h >> 12) % 100u) / 100.0f * 1.8f;
+                PushProp(out, (h % 3u) == 0u ? 1 : 0, px, py, pz, (float)(h % 360u), tree);
+                continue;
+            }
+            if (zone == TERRAIN_ZONE_HIGHLAND) {
+                if ((h % 2u) != 0u) continue;
+                PushProp(out, (h % 4u) == 0u ? 2 : 1, px, py, pz, (float)(h % 360u), scale);
+                continue;
+            }
+            /* Open country: a few trees, the odd farmhouse. */
+            if ((h % 29u) == 0u && py < 36.0f) {
+                PushProp(out, 3, px, py, pz, 0.0f, 1.0f);
+                continue;
+            }
+            if ((h % 4u) != 0u) continue;
+            PushProp(out, 0, px, py, pz, (float)(h % 360u), scale);
         }
     }
 }
@@ -254,9 +349,9 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
                     for (int k = 0; k < 3; k++) {
                         int id = tris[t][k];
                         float dist = hypotf(corner[id].x - viewX, corner[id].z - viewZ);
-                        float fog = (dist - 70.0f) / 380.0f;
+                        float fog = (dist - 140.0f) / 520.0f;
                         if (fog < 0.0f) fog = 0.0f;
-                        if (fog > 0.82f) fog = 0.82f;
+                        if (fog > 0.7f) fog = 0.7f;
                         Color water = LerpColor((Color){ 64, 150, 196, 255 },
                                                 (Color){ 186, 214, 228, 255 }, fog * 0.7f);
                         water.a = 170;
@@ -271,7 +366,7 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
         out->hasWater = 1;
     }
 
-    if (lod == 0) AddProps(cx, cz, x0, z0, size, out);
+    if (lod <= 2) AddProps(cx, cz, x0, z0, size, lod, out);
     out->ready = 1;
     return 1;
 }

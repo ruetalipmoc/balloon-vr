@@ -54,16 +54,95 @@ static float Fbm(float x, float z, float freq, float amp, int octaves)
     return sum / norm;
 }
 
+static float Smooth(float t)
+{
+    t = Clampf(t, 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+/* 0 below lo, 1 above hi. */
+static float Ramp(float v, float lo, float hi)
+{
+    return Smooth((v - lo) / (hi - lo));
+}
+
+typedef struct Land {
+    float height;
+    float city, farm, forest, highland;
+} Land;
+
+/* One evaluation of every mask. Height, zone and colour all share it so a
+ * river cannot drift off the blue bed, and a town cannot sit on a ridge. */
+static Land LandAt(float x, float z)
+{
+    float elev = Fbm(x, z, 0.0016f, 1.0f, 3);
+    float habit = Fbm(x + 1400.0f, z - 900.0f, 0.00125f, 1.0f, 3);
+    float wet = Fbm(x - 500.0f, z + 700.0f, 0.0019f, 1.0f, 3);
+
+    float city = Ramp(habit, 0.57f, 0.66f) * Ramp(elev, 0.14f, 0.26f) * (1.0f - Ramp(elev, 0.68f, 0.80f));
+    float farm = Ramp(habit, 0.40f, 0.50f) * (1.0f - Ramp(habit, 0.62f, 0.72f));
+    farm *= Ramp(elev, 0.12f, 0.24f) * (1.0f - Ramp(elev, 0.58f, 0.70f)) * (1.0f - city);
+    float highland = Ramp(elev, 0.60f, 0.72f) * (1.0f - city);
+    float forest = Ramp(wet, 0.54f, 0.64f) * (1.0f - city) * (1.0f - farm) * (1.0f - highland);
+
+    float macro = Fbm(x, z, 0.00115f, 1.0f, 3);
+    float detail = Fbm(x + 80.0f, z - 40.0f, 0.0052f, 1.0f, 3);
+    float ridgeN = Fbm(x + 520.0f, z - 280.0f, 0.0026f, 1.0f, 3);
+    float ridge = 1.0f - fabsf(ridgeN * 2.0f - 1.0f);
+
+    float h = 8.0f + macro * 34.0f + (detail - 0.5f) * 18.0f + ridge * ridge * 20.0f;
+    h += highland * (16.0f + ridge * 28.0f);
+
+    /* Towns and fields follow the broad swell but lose the local bumps,
+     * so the lots read as planted or paved rather than draped on a hill. */
+    float farmPad = 9.0f + macro * 16.0f;
+    float cityPad = 12.0f + macro * 8.0f;
+    h = Lerpf(h, farmPad, farm * 0.9f);
+    h = Lerpf(h, cityPad, city);
+
+    float basin = Fbm(x + 160.0f, z - 240.0f, 0.0024f, 1.0f, 3);
+    float lake = Ramp(basin, 0.70f, 0.80f) * (1.0f - city) * (1.0f - highland * 0.5f);
+    h = Lerpf(h, TERRAIN_WATER - 2.8f, lake);
+
+    /* A warped contour is a meandering valley. The wide term lowers the
+     * banks; the narrow term cuts the bed down to the water. */
+    float warpX = Fbm(x, z, 0.0018f, 1.0f, 2) - 0.5f;
+    float warpZ = Fbm(x + 260.0f, z - 140.0f, 0.0018f, 1.0f, 2) - 0.5f;
+    float rn = Fbm(x + warpX * 220.0f, z + warpZ * 220.0f, 0.0031f, 1.0f, 3);
+    float d = fabsf(rn - 0.5f);
+    float valley = 1.0f - Smooth(d / 0.075f);
+    float channel = 1.0f - Smooth(d / 0.026f);
+    float wetMask = (1.0f - city) * (1.0f - highland * 0.75f);
+    float shelf = TERRAIN_WATER + 3.2f;
+    h = Lerpf(h, Minf(h, shelf), valley * wetMask);
+    h = Lerpf(h, TERRAIN_WATER - 1.1f, channel * wetMask);
+
+    if (h < 0.0f) h = 0.0f;
+
+    Land land;
+    land.height = h;
+    land.city = city;
+    land.farm = farm;
+    land.forest = forest;
+    land.highland = highland;
+    return land;
+}
+
 float Terrain_Height(float x, float z)
 {
-    /* Broad hills plus a ridged octave so horizons read as low-poly mountains
-     * even when a distant chunk is only a couple of triangles. */
-    float hills = Fbm(x, z, 0.0038f, 1.0f, 5);
-    float ridge = 1.0f - fabsf(Fbm(x + 400.0f, z - 250.0f, 0.0022f, 1.0f, 3) * 2.0f - 1.0f);
-    float h = hills * 46.0f + ridge * ridge * 28.0f;
-    h += (Fbm(x, z, 0.0007f, 1.0f, 2) - 0.5f) * 18.0f;
-    if (h < 0.0f) h = 0.0f;
-    return h;
+    return LandAt(x, z).height;
+}
+
+int Terrain_Zone(float x, float z)
+{
+    Land land = LandAt(x, z);
+    float best = 0.0f;
+    int zone = TERRAIN_ZONE_PLAINS;
+    if (land.highland > best) { best = land.highland; zone = TERRAIN_ZONE_HIGHLAND; }
+    if (land.forest > best) { best = land.forest; zone = TERRAIN_ZONE_FOREST; }
+    if (land.farm > best) { best = land.farm; zone = TERRAIN_ZONE_FARM; }
+    if (land.city > best) zone = TERRAIN_ZONE_CITY;
+    return zone;
 }
 
 float Terrain_Moisture(float x, float z)

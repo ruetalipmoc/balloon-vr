@@ -20,11 +20,12 @@ On the **left wrist** a flat instrument shows:
 * altitude above the ground under the basket, and height above the world datum
 * wind direction and strength at -50 m, here, +50 m and +100 m
 
-The landscape is generated from a fixed seed as you drift, with a hard LOD
-cutoff: nearby chunks are faceted hills, trees and the odd house; distant
-chunks collapse to a couple of triangles fogged into the sky. There are no
-art assets — meshes, the wicker basket, the striped envelope and the watch
-face are built in code.
+The landscape is generated from a fixed seed as you drift: rolling ground,
+river valleys and lakes, and broad regions of farmland (square fields),
+forest, open country and small towns. A hard LOD cutoff keeps nearby chunks
+faceted, with trees and buildings, while distant chunks collapse to a couple
+of triangles fogged into the sky. There are no art assets — meshes, the
+wicker basket, the envelope and the watch face are built in code.
 
 If no OpenXR runtime is running, the same simulation opens in a window.
 

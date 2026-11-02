@@ -75,6 +75,33 @@ static void TestTerrain(void)
     CHECK(fabsf(nx * nx + ny * ny + nz * nz - 1.0f) < 0.02f);
     float moisture = Terrain_Moisture(0.0f, 0.0f);
     CHECK(moisture >= 0.0f && moisture <= 1.0f);
+
+    int count[5] = { 0, 0, 0, 0, 0 };
+    int wet = 0;
+    float lo = 1.0e9f;
+    float hi = -1.0e9f;
+    for (int iz = -30; iz <= 30; iz++) {
+        for (int ix = -30; ix <= 30; ix++) {
+            float x = (float)ix * 96.0f;
+            float z = (float)iz * 96.0f;
+            float h = Terrain_Height(x, z);
+            if (h < lo) lo = h;
+            if (h > hi) hi = h;
+            if (h < TERRAIN_WATER) wet++;
+            int zone = Terrain_Zone(x, z);
+            CHECK(zone >= TERRAIN_ZONE_PLAINS && zone <= TERRAIN_ZONE_CITY);
+            count[zone]++;
+        }
+    }
+    int kinds = 0;
+    for (int i = 0; i < 5; i++) if (count[i] > 8) kinds++;
+    if (kinds < 4 || wet < 8 || hi - lo < 22.0f) {
+        fprintf(stderr, "zones plains %d farm %d forest %d highland %d city %d  wet %d  relief %.1f\n",
+                count[0], count[1], count[2], count[3], count[4], wet, hi - lo);
+    }
+    CHECK(kinds >= 4);
+    CHECK(wet > 8);
+    CHECK(hi - lo > 22.0f);
 }
 
 static void TestBalloon(void)

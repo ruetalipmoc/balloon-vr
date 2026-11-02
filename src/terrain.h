@@ -6,8 +6,22 @@
 #define TERRAIN_CHUNK_SIZE 64.0f
 #define TERRAIN_WATER 6.2f
 
+/* Landscape class at a point. The height field blends across borders;
+ * this is the dominant class, used for colour and props. */
+#define TERRAIN_ZONE_PLAINS   0
+#define TERRAIN_ZONE_FARM     1
+#define TERRAIN_ZONE_FOREST   2
+#define TERRAIN_ZONE_HIGHLAND 3
+#define TERRAIN_ZONE_CITY     4
+
+/* Axis-aligned lot size. Fields and city blocks share the world axes
+ * so the patchwork stays square when seen from the basket. */
+#define TERRAIN_FIELD      128.0f
+#define TERRAIN_CITY_BLOCK 64.0f
+
 float Terrain_Height(float x, float z);
 float Terrain_Moisture(float x, float z);
+int Terrain_Zone(float x, float z);
 
 /* Unit normal from central differences. ny is positive on a flat field. */
 void Terrain_Normal(float x, float z, float* nx, float* ny, float* nz);

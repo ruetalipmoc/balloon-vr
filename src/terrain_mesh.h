@@ -6,13 +6,13 @@
 
 #include "raylib.h"
 
-#define CHUNK_MAX_PROPS 8
+#define CHUNK_MAX_PROPS 24
 
 typedef struct Prop {
     float x, y, z;
     float yaw;
     float scale;
-    int kind; /* 0 broadleaf, 1 pine, 2 rock, 3 house */
+    int kind; /* 0 broadleaf, 1 pine, 2 rock, 3 house, 4 barn, 5 block, 6 tower */
 } Prop;
 
 typedef struct ChunkMesh {
