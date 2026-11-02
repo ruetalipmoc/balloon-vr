@@ -308,87 +308,45 @@ static void AddProps(int cx, int cz, float x0, float z0, float size, int lod,
     }
 }
 
-/* 0 through the inner part of this level's ring, 1 at the outer edge,
- * where the next chunk is already the coarser grid. */
-static float LodMorph(int lod, float dist)
+/* Vertical ribbon under a border edge, drawn both ways. It sits under the
+ * shared line, so it only shows through a hairline crack. */
+static void AddSkirt(float* v, float* n, unsigned char* col, float* uv, int* i,
+                     float x0, float y0, float z0, float x1, float y1, float z1,
+                     float nx0, float ny0, float nz0, float nx1, float ny1, float nz1,
+                     Color c0, Color c1)
 {
-    float start = 0.0f;
-    float end = 100.0f;
-    if (lod == 1) { start = 100.0f; end = 200.0f; }
-    else if (lod == 2) { start = 200.0f; end = 340.0f; }
-    else if (lod == 3) { start = 340.0f; end = 520.0f; }
-    else if (lod >= 4) return 0.0f;
-    float t = (dist - start) / (end - start);
-    float u = (t - 0.55f) / 0.45f;
-    if (u <= 0.0f) return 0.0f;
-    if (u >= 1.0f) return 1.0f;
-    return u * u * (3.0f - 2.0f * u);
+    const float drop = 1.6f;
+    float y0b = y0 - drop;
+    float y1b = y1 - drop;
+    float xs[4] = { x0, x1, x1, x0 };
+    float ys[4] = { y0, y1, y1b, y0b };
+    float zs[4] = { z0, z1, z1, z0 };
+    float nxs[4] = { nx0, nx1, nx1, nx0 };
+    float nys[4] = { ny0, ny1, ny1, ny0 };
+    float nzs[4] = { nz0, nz1, nz1, nz0 };
+    Color cs[4] = { c0, c1, c1, c0 };
+    int tris[4][3] = { { 0, 1, 2 }, { 0, 2, 3 }, { 0, 2, 1 }, { 0, 3, 2 } };
+    for (int t = 0; t < 4; t++) {
+        for (int k = 0; k < 3; k++) {
+            int id = tris[t][k];
+            PushVert(v, n, col, uv, *i, xs[id], ys[id], zs[id], nxs[id], nys[id], nzs[id], cs[id]);
+            (*i)++;
+        }
+    }
 }
 
-static int OnChunkBorder(float x, float z, float x0, float z0, float size)
+static void SkirtEdge(float* v, float* n, unsigned char* col, float* uv, int* i,
+                      int jx0, int jz0, int jx1, int jz1, int grid,
+                      float x0, float z0, float size, int cx, int cz,
+                      float viewX, float viewZ)
 {
-    const float e = 0.08f;
-    return (x <= x0 + e || x >= x0 + size - e || z <= z0 + e || z >= z0 + size - e);
-}
-
-/* Height and normal of the next-coarser grid. A fully morphed vertex lands
- * on the same surface the neighbouring chunk already draws. */
-static void CoarseSurface(float x, float z, float x0, float z0, float size, int coarse,
-                          float* y, float* nx, float* ny, float* nz)
-{
-    if (coarse < 1) coarse = 1;
-    float step = size / (float)coarse;
-    float fx = (x - x0) / step;
-    float fz = (z - z0) / step;
-    int ix = (int)floorf(fx);
-    int iz = (int)floorf(fz);
-    if (ix < 0) ix = 0;
-    if (iz < 0) iz = 0;
-    if (ix >= coarse) ix = coarse - 1;
-    if (iz >= coarse) iz = coarse - 1;
-    float tx = Clampf(fx - (float)ix, 0.0f, 1.0f);
-    float tz = Clampf(fz - (float)iz, 0.0f, 1.0f);
-    float xA = x0 + (float)ix * step;
-    float zA = z0 + (float)iz * step;
-    float h00 = Terrain_Height(xA, zA);
-    float h10 = Terrain_Height(xA + step, zA);
-    float h01 = Terrain_Height(xA, zA + step);
-    float h11 = Terrain_Height(xA + step, zA + step);
-    *y = Lerpf(Lerpf(h00, h10, tx), Lerpf(h01, h11, tx), tz);
-    float dhdx = Lerpf(h10 - h00, h11 - h01, tz) / step;
-    float dhdz = Lerpf(h01 - h00, h11 - h10, tx) / step;
-    float vx = -dhdx;
-    float vy = 1.0f;
-    float vz = -dhdz;
-    float len = sqrtf(vx * vx + vy * vy + vz * vz);
-    if (len < 1.0e-5f) len = 1.0f;
-    *nx = vx / len;
-    *ny = vy / len;
-    *nz = vz / len;
-}
-
-/* Interior only. Border vertices stay put: the fine side is snapped onto
- * them, and moving either side would open a crack. */
-static void MorphCorner(TerrainSample* s, int lod, int grid, float x0, float z0, float size,
-                        float viewX, float viewZ, float* nx, float* ny, float* nz)
-{
-    if (OnChunkBorder(s->x, s->z, x0, z0, size)) return;
-    int coarse = grid / 2;
-    if (coarse < 1) return;
-    float m = LodMorph(lod, hypotf(s->x - viewX, s->z - viewZ));
-    if (m <= 0.001f) return;
-    float cy, cnx, cny, cnz;
-    CoarseSurface(s->x, s->z, x0, z0, size, coarse, &cy, &cnx, &cny, &cnz);
-    s->y = Lerpf(s->y, cy, m);
-    if (!nx) return;
-    float vx = Lerpf(*nx, cnx, m);
-    float vy = Lerpf(*ny, cny, m);
-    float vz = Lerpf(*nz, cnz, m);
-    float len = sqrtf(vx * vx + vy * vy + vz * vz);
-    if (len < 1.0e-5f) len = 1.0f;
-    *nx = vx / len;
-    *ny = vy / len;
-    *nz = vz / len;
+    TerrainSample a = Terrain_Sample(jx0, jz0, grid, x0, z0, size, cx, cz, viewX, viewZ);
+    TerrainSample b = Terrain_Sample(jx1, jz1, grid, x0, z0, size, cx, cz, viewX, viewZ);
+    float nax, nay, naz, nbx, nby, nbz;
+    Color ca, cb;
+    SampleShade(&a, viewX, viewZ, &nax, &nay, &naz, &ca);
+    SampleShade(&b, viewX, viewZ, &nbx, &nby, &nbz, &cb);
+    AddSkirt(v, n, col, uv, i, a.x, a.y, a.z, b.x, b.y, b.z, nax, nay, naz, nbx, nby, nbz, ca, cb);
 }
 
 int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh* out)
@@ -400,7 +358,7 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
     float z0 = (float)cz * size;
 
     int quads = grid * grid;
-    int groundVerts = quads * 6;
+    int groundVerts = quads * 6 + grid * 4 * 12;
     float* gv = (float*)MemAlloc((unsigned int)groundVerts * 3 * sizeof(float));
     float* gn = (float*)MemAlloc((unsigned int)groundVerts * 3 * sizeof(float));
     unsigned char* gc = (unsigned char*)MemAlloc((unsigned int)groundVerts * 4);
@@ -413,10 +371,6 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
             TerrainSample s10 = Terrain_Sample(jx + 1, jz, grid, x0, z0, size, cx, cz, viewX, viewZ);
             TerrainSample s11 = Terrain_Sample(jx + 1, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ);
             TerrainSample s01 = Terrain_Sample(jx, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ);
-            MorphCorner(&s00, lod, grid, x0, z0, size, viewX, viewZ, NULL, NULL, NULL);
-            MorphCorner(&s10, lod, grid, x0, z0, size, viewX, viewZ, NULL, NULL, NULL);
-            MorphCorner(&s11, lod, grid, x0, z0, size, viewX, viewZ, NULL, NULL, NULL);
-            MorphCorner(&s01, lod, grid, x0, z0, size, viewX, viewZ, NULL, NULL, NULL);
             if (s00.y < TERRAIN_WATER || s10.y < TERRAIN_WATER || s11.y < TERRAIN_WATER || s01.y < TERRAIN_WATER)
                 waterQuads++;
         }
@@ -433,10 +387,8 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
             };
             float nx[4], ny[4], nz[4];
             Color col[4];
-            for (int k = 0; k < 4; k++) {
+            for (int k = 0; k < 4; k++)
                 SampleShade(&corner[k], viewX, viewZ, &nx[k], &ny[k], &nz[k], &col[k]);
-                MorphCorner(&corner[k], lod, grid, x0, z0, size, viewX, viewZ, &nx[k], &ny[k], &nz[k]);
-            }
             /* Winding faces up (right-handed Y-up). The other order is culled
              * from the basket, which sits above the mesh. */
             int tris[2][3] = { { 0, 2, 1 }, { 0, 3, 2 } };
@@ -450,7 +402,13 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
             }
         }
     }
-    UploadFlat(&out->ground, groundVerts, gv, gn, gc, gu);
+    for (int e = 0; e < grid; e++) {
+        SkirtEdge(gv, gn, gc, gu, &gi, e, 0, e + 1, 0, grid, x0, z0, size, cx, cz, viewX, viewZ);
+        SkirtEdge(gv, gn, gc, gu, &gi, e, grid, e + 1, grid, grid, x0, z0, size, cx, cz, viewX, viewZ);
+        SkirtEdge(gv, gn, gc, gu, &gi, 0, e, 0, e + 1, grid, x0, z0, size, cx, cz, viewX, viewZ);
+        SkirtEdge(gv, gn, gc, gu, &gi, grid, e, grid, e + 1, grid, x0, z0, size, cx, cz, viewX, viewZ);
+    }
+    UploadFlat(&out->ground, gi, gv, gn, gc, gu);
 
     if (waterQuads > 0) {
         int wvCount = waterQuads * 6;
@@ -467,8 +425,6 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
                     Terrain_Sample(jx + 1, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ),
                     Terrain_Sample(jx, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ)
                 };
-                for (int k = 0; k < 4; k++)
-                    MorphCorner(&corner[k], lod, grid, x0, z0, size, viewX, viewZ, NULL, NULL, NULL);
                 if (!(corner[0].y < TERRAIN_WATER || corner[1].y < TERRAIN_WATER ||
                       corner[2].y < TERRAIN_WATER || corner[3].y < TERRAIN_WATER))
                     continue;

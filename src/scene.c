@@ -49,10 +49,6 @@ struct Scene {
     Particle particles[MAX_PARTICLES];
     Sound burner;
     int audioReady;
-
-    RenderTexture2D labelBurn;
-    RenderTexture2D labelVent;
-    int labelsReady;
 };
 
 static Color LerpColor(Color a, Color b, float t)
@@ -303,18 +299,6 @@ static Mesh MakeSky(void)
     return MakeFlatMesh(i, v, n, c, uv);
 }
 
-static RenderTexture2D MakeLabel(const char* text, Color ink, Color plate)
-{
-    RenderTexture2D rt = LoadRenderTexture(256, 64);
-    BeginTextureMode(rt);
-    ClearBackground(plate);
-    int w = MeasureText(text, 40);
-    DrawText(text, (256 - w) / 2, 12, 40, ink);
-    EndTextureMode();
-    SetTextureFilter(rt.texture, TEXTURE_FILTER_BILINEAR);
-    return rt;
-}
-
 static void MakeBurnerSound(Scene* s)
 {
     if (!IsAudioDeviceReady()) return;
@@ -372,9 +356,6 @@ Scene* Scene_Create(void)
     s->meshesReady = 1;
 
     Watch_Init(&s->watch);
-    s->labelBurn = MakeLabel("BURN", (Color){ 255, 236, 230, 255 }, (Color){ 150, 32, 40, 255 });
-    s->labelVent = MakeLabel("VENT", (Color){ 230, 255, 236, 255 }, (Color){ 24, 110, 58, 255 });
-    s->labelsReady = 1;
 
     InitAudioDevice();
     MakeBurnerSound(s);
@@ -394,10 +375,6 @@ void Scene_Destroy(Scene* s)
         UnloadMaterial(s->material);
     }
     Watch_Shutdown(&s->watch);
-    if (s->labelsReady) {
-        UnloadRenderTexture(s->labelBurn);
-        UnloadRenderTexture(s->labelVent);
-    }
     if (s->audioReady) UnloadSound(s->burner);
     if (IsAudioDeviceReady()) CloseAudioDevice();
     free(s);
@@ -494,6 +471,15 @@ void Scene_Update(Scene* s, const HandInput hands[2], float dt, int keyBurner, i
         }
     }
 
+    if (hands[0].active) {
+        Quaternion q = { hands[0].qx, hands[0].qy, hands[0].qz, hands[0].qw };
+        int force = -1;
+        const char* page = getenv("BALLOON_WATCH_PAGE");
+        if (page && page[0] == '1') force = 1;
+        else if (page && page[0] == '0') force = 0;
+        else if (IsKeyDown(KEY_V) || IsKeyDown(KEY_TAB)) force = 1;
+        Watch_UpdatePage(&s->watch, q, force);
+    }
     Watch_Render(&s->watch, &s->balloon, s->groundY);
 }
 
@@ -662,40 +648,6 @@ static void DrawRope(Vector3 a, Vector3 b, float sag, float radius, Color color)
         };
     }
     DrawTube(pts, n + 1, radius, 5, color, 0);
-}
-
-static void DrawLabel(Texture2D tex, Vector3 pos, Vector3 eye)
-{
-    Vector3 n = Vector3Subtract(eye, pos);
-    float len = Vector3Length(n);
-    if (len < 1.0e-4f) n = (Vector3){ 0, 0, 1 };
-    else n = Vector3Scale(n, 1.0f / len);
-    Vector3 right = Vector3CrossProduct((Vector3){ 0, 1, 0 }, n);
-    if (Vector3Length(right) < 1.0e-4f) right = (Vector3){ 1, 0, 0 };
-    right = Vector3Normalize(right);
-    Vector3 up = Vector3Normalize(Vector3CrossProduct(n, right));
-
-    Matrix m = { 0 };
-    m.m0 = right.x; m.m1 = right.y; m.m2 = right.z;
-    m.m4 = up.x;    m.m5 = up.y;    m.m6 = up.z;
-    m.m8 = n.x;     m.m9 = n.y;     m.m10 = n.z;
-    m.m12 = pos.x;  m.m13 = pos.y;  m.m14 = pos.z;
-    m.m15 = 1.0f;
-
-    rlPushMatrix();
-    float16 f = MatrixToFloatV(m);
-    rlMultMatrixf(f.v);
-    rlSetTexture(tex.id);
-    rlBegin(RL_QUADS);
-    rlColor4ub(255, 255, 255, 255);
-    rlNormal3f(0, 0, 1);
-    rlTexCoord2f(0, 0); rlVertex3f(-0.12f, -0.030f, 0);
-    rlTexCoord2f(1, 0); rlVertex3f( 0.12f, -0.030f, 0);
-    rlTexCoord2f(1, 1); rlVertex3f( 0.12f,  0.030f, 0);
-    rlTexCoord2f(0, 1); rlVertex3f(-0.12f,  0.030f, 0);
-    rlEnd();
-    rlSetTexture(0);
-    rlPopMatrix();
 }
 
 /* Axis-aligned spar. The two endpoints must differ on one axis only. */
@@ -1239,11 +1191,6 @@ void Scene_Draw(Scene* s, Vector3 eye)
              redSag, 0.008f, red);
     DrawRope((Vector3){ gx, gy, gz }, (Vector3){ 0.15f, ENVELOPE_TOP_Y, 0.0f }, greenSag, 0.008f, green);
 
-    if (s->labelsReady) {
-        DrawLabel(s->labelBurn.texture, (Vector3){ HANDLE_RED_X, 1.66f, -0.02f }, eye);
-        DrawLabel(s->labelVent.texture, (Vector3){ HANDLE_GREEN_X, 1.66f, -0.02f }, eye);
-    }
-
     BeginBlendMode(BLEND_ALPHA);
     DrawParticles(s);
     EndBlendMode();
@@ -1253,6 +1200,6 @@ void Scene_Draw(Scene* s, Vector3 eye)
     if (s->lastHands[0].active) {
         Quaternion q = { s->lastHands[0].qx, s->lastHands[0].qy, s->lastHands[0].qz, s->lastHands[0].qw };
         Vector3 p = { s->lastHands[0].x, s->lastHands[0].y, s->lastHands[0].z };
-        Watch_Draw(&s->watch, p, q);
+        Watch_Draw(&s->watch, p, q, eye);
     }
 }

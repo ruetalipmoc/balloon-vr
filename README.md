@@ -39,6 +39,8 @@ If no OpenXR runtime is running, the same simulation opens in a window.
 | `F` or left mouse (desktop) | Pull the red handle |
 | `G` or right mouse (desktop) | Pull the green handle |
 | Mouse (desktop, after a click) | Look around the basket |
+| Look down, or `C` (desktop); turn the left wrist (headset) | Show the watch |
+| Roll the wrist, or `V` | Wind page of the watch |
 | `R` | Recenter your head over the basket |
 | `Esc` | Quit |
 

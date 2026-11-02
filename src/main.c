@@ -95,14 +95,24 @@ static void DesktopHands(HandInput hands[2], Vector3 eye, int burn, int vent)
 
     Vector3 leftPos;
     Vector3 rightPos;
-    /* Idle pose keeps the left wrist in the lower-left of a relaxed view so
-     * the instrument can be read without a headset. Grabbing a handle
-     * overrides that hand. */
+    Quaternion leftQ;
+    /* The watch only shows when the back of the left hand faces the eyes.
+     * Look down, or hold C, to raise the wrist into that pose. V rolls it
+     * over to the wind page. Grabbing the vent still takes the left hand. */
+    int reading = g_pitch < -0.40f || IsKeyDown(KEY_C);
+    if (getenv("BALLOON_WATCH")) reading = 1;
     if (vent) {
         leftPos = (Vector3){ HANDLE_GREEN_X, HANDLE_REST_Y - HANDLE_MAX_PULL * 0.85f, HANDLE_Z };
+        leftQ = WristFacing(leftPos, eye);
+    } else if (reading) {
+        leftPos = Vector3Add(eye, Vector3Add(Vector3Scale(right, -0.14f),
+                              Vector3Add((Vector3){ 0, -0.04f, 0 }, Vector3Scale(forward, 0.40f))));
+        leftQ = WristFacing(leftPos, eye);
     } else {
-        leftPos = Vector3Add(eye, Vector3Add(Vector3Scale(right, -0.20f),
-                              Vector3Add((Vector3){ 0, -0.18f, 0 }, Vector3Scale(forward, 0.46f))));
+        leftPos = Vector3Add(eye, Vector3Add(Vector3Scale(right, -0.28f),
+                              Vector3Add((Vector3){ 0, -0.48f, 0 }, Vector3Scale(forward, 0.16f))));
+        /* Palm inward, watch toward the floor, so a casual glance misses it. */
+        leftQ = QuaternionFromAxisAngle((Vector3){ 0, 0, 1 }, -1.15f);
     }
     if (burn) {
         rightPos = (Vector3){ HANDLE_RED_X, HANDLE_REST_Y - HANDLE_MAX_PULL * 0.85f, HANDLE_Z };
@@ -110,7 +120,7 @@ static void DesktopHands(HandInput hands[2], Vector3 eye, int burn, int vent)
         rightPos = Vector3Add(eye, Vector3Add(Vector3Scale(right, 0.22f),
                                Vector3Add((Vector3){ 0, -0.22f, 0 }, Vector3Scale(forward, 0.40f))));
     }
-    HandAt(&hands[0], leftPos, WristFacing(leftPos, eye), vent);
+    HandAt(&hands[0], leftPos, leftQ, vent);
     HandAt(&hands[1], rightPos, WristFacing(rightPos, eye), burn);
 }
 
@@ -118,11 +128,11 @@ static void DrawHint(int vr)
 {
 #ifdef __EMSCRIPTEN__
     (void)vr;
-    const char* line = "Glisser pour regarder    F bruleur    G ou clic droit soupape";
+    const char* line = "Glisser pour regarder    F bruleur    G soupape    regarder en bas : montre";
 #else
     const char* line = vr
-        ? "Squeeze a ceiling handle and pull down.  F burner   G vent   R recenter   Esc quit"
-        : "Click to look.   F / left mouse burner (red)   G / right mouse vent (green)   Esc quit";
+        ? "Pull a ceiling handle. Look at the left wrist to read it.  F burner  G vent  V wind  R recenter"
+        : "Click to look.  F burner (red)  G vent (green)  Look down or C: watch  V: winds";
 #endif
     DrawRectangle(0, GetScreenHeight() - 36, GetScreenWidth(), 36, (Color){ 8, 16, 24, 180 });
     DrawText(line, 16, GetScreenHeight() - 26, 18, (Color){ 232, 244, 240, 255 });

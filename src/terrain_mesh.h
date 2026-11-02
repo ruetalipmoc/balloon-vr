@@ -1,6 +1,6 @@
-/* Chunk meshes with distance LOD. Grids step by halves down to one quad,
- * easing onto the next grid before the switch. The farthest ring drops its
- * colour into a blue haze. Borders stay stitched so LOD changes do not crack. */
+/* Chunk meshes with distance LOD. Shared edges use the same heights, and a
+ * short skirt under each border hides the hairline a T-junction can leave.
+ * The farthest ring drops its colour into a blue haze. */
 #ifndef BALLOON_TERRAIN_MESH_H
 #define BALLOON_TERRAIN_MESH_H
 

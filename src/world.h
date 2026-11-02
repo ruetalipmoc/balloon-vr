@@ -11,13 +11,14 @@
 /* Overhead frame the handles hang from. Reachable from a standing pose. */
 #define FRAME_Y 2.16f
 
-/* Handles hang just in front of the eyes, high enough to grab with a raised hand. */
-#define HANDLE_RED_X (-0.22f)
-#define HANDLE_GREEN_X 0.22f
-#define HANDLE_Z (-0.34f)
-#define HANDLE_REST_Y 1.82f
-#define HANDLE_ANCHOR_Y 2.12f
-#define HANDLE_MAX_PULL 0.48f
+/* Handles hang from the middle of the frame, so either one can be reached
+ * from anywhere in the basket, facing any way. Red is left, green is right. */
+#define HANDLE_RED_X (-0.18f)
+#define HANDLE_GREEN_X 0.18f
+#define HANDLE_Z (-0.16f)
+#define HANDLE_REST_Y 1.74f
+#define HANDLE_ANCHOR_Y 2.14f
+#define HANDLE_MAX_PULL 0.46f
 
 /* Pull past ON to light the burner / open the vent. Drop below OFF to stop.
  * The gap is hysteresis so a trembling hand does not flicker the flame. */
