@@ -392,8 +392,12 @@ void Scene_Update(Scene* s, const HandInput hands[2], float dt, int keyBurner, i
     s->ventOpen += (targetVent - s->ventOpen) * Minf(1.0f, dt * 4.0f);
 
     if (s->flame > 0.15f) {
-        Vector3 p = { (float)(rand() % 20 - 10) / 200.0f, 2.02f, (float)(rand() % 20 - 10) / 200.0f };
-        Vector3 v = { (float)(rand() % 10 - 5) / 40.0f, 2.2f + s->flame * 2.0f, (float)(rand() % 10 - 5) / 40.0f };
+        /* Jets sit on top of the burner coils, just under the envelope mouth. */
+        float ang = (float)(rand() % 628) / 100.0f;
+        float rad = 0.03f + (float)(rand() % 40) / 1000.0f;
+        float side = (rand() & 1) ? -0.055f : 0.055f;
+        Vector3 p = { side + cosf(ang) * rad, 2.68f, sinf(ang) * rad };
+        Vector3 v = { (float)(rand() % 10 - 5) / 50.0f, 3.0f + s->flame * 2.4f, (float)(rand() % 10 - 5) / 50.0f };
         SpawnParticle(s, 0, p, v, 0.45f + s->flame * 0.25f);
     }
     if (s->ventOpen > 0.2f) {
@@ -523,12 +527,289 @@ static void DrawLabel(Texture2D tex, Vector3 pos, Vector3 eye)
     rlPopMatrix();
 }
 
+/* Axis-aligned spar. The two endpoints must differ on one axis only. */
+static void DrawBar(Vector3 a, Vector3 b, float thick, Color color)
+{
+    Vector3 mid = {
+        (a.x + b.x) * 0.5f,
+        (a.y + b.y) * 0.5f,
+        (a.z + b.z) * 0.5f
+    };
+    float sx = fabsf(b.x - a.x);
+    float sy = fabsf(b.y - a.y);
+    float sz = fabsf(b.z - a.z);
+    if (sx < thick) sx = thick;
+    if (sy < thick) sy = thick;
+    if (sz < thick) sz = thick;
+    DrawCube(mid, sx, sy, sz, color);
+}
+
+/* Open lattice just above the wicker. Short on purpose: eyes at ~1.62 m
+ * look over the handrail, the lattice only frames the view. */
+static void DrawGuardRail(void)
+{
+    Color iron = { 68, 74, 82, 255 };
+    Color ironDark = { 44, 48, 54, 255 };
+    Color leather = { 122, 70, 46, 255 };
+    Color brass = { 198, 156, 74, 255 };
+
+    const float yPlant = BASKET_RIM_Y - 0.02f;
+    const float yFoot = BASKET_RIM_Y + 0.07f;
+    const float yHand = BASKET_RIM_Y + 0.34f;
+    const float yMid = (yFoot + yHand) * 0.5f;
+    const float ix = BASKET_HALF_X - 0.10f;
+    const float iz = BASKET_HALF_Z - 0.08f;
+
+    const Vector3 corner[4] = {
+        { -ix, 0, -iz },
+        {  ix, 0, -iz },
+        {  ix, 0,  iz },
+        { -ix, 0,  iz }
+    };
+
+    for (int s = 0; s < 4; s++) {
+        Vector3 a = corner[s];
+        Vector3 b = corner[(s + 1) & 3];
+        /* Long sides (along X) get one more bay than the short sides. */
+        int bays = (s & 1) ? 3 : 4;
+        Vector3 dir = { b.x - a.x, 0.0f, b.z - a.z };
+        float len = sqrtf(dir.x * dir.x + dir.z * dir.z);
+        if (len < 1.0e-4f) continue;
+        dir.x /= len;
+        dir.z /= len;
+        /* Rails stop on the post face. Corner posts are drawn by the
+         * previous side, so each joint is a single cube. */
+        const float inset = 0.016f;
+        Vector3 ra = { a.x + dir.x * inset, 0, a.z + dir.z * inset };
+        Vector3 rb = { b.x - dir.x * inset, 0, b.z - dir.z * inset };
+
+        for (int i = 1; i <= bays; i++) {
+            float t = (float)i / (float)bays;
+            float x = Lerpf(a.x, b.x, t);
+            float z = Lerpf(a.z, b.z, t);
+            int end = (i == bays);
+            float thick = end ? 0.032f : 0.018f;
+            DrawCube((Vector3){ x, (yPlant + yHand) * 0.5f, z }, thick, yHand - yPlant, thick,
+                     end ? ironDark : iron);
+            if (end) DrawSphere((Vector3){ x, yHand + 0.014f, z }, 0.016f, brass);
+        }
+
+        DrawBar((Vector3){ ra.x, yHand, ra.z }, (Vector3){ rb.x, yHand, rb.z }, 0.028f, leather);
+        DrawBar((Vector3){ ra.x, yMid, ra.z }, (Vector3){ rb.x, yMid, rb.z }, 0.014f, iron);
+        DrawBar((Vector3){ ra.x, yFoot, ra.z }, (Vector3){ rb.x, yFoot, rb.z }, 0.014f, ironDark);
+
+        for (int i = 0; i < bays; i++) {
+            float t0 = (float)i / (float)bays;
+            float t1 = (float)(i + 1) / (float)bays;
+            Vector3 p0 = { Lerpf(a.x, b.x, t0), 0, Lerpf(a.z, b.z, t0) };
+            Vector3 p1 = { Lerpf(a.x, b.x, t1), 0, Lerpf(a.z, b.z, t1) };
+            int flip = (i + s) & 1;
+            DrawCylinderEx((Vector3){ p0.x, flip ? yFoot : yMid, p0.z },
+                           (Vector3){ p1.x, flip ? yMid : yFoot, p1.z },
+                           0.007f, 0.007f, 4, iron);
+            DrawCylinderEx((Vector3){ p0.x, flip ? yMid : yHand, p0.z },
+                           (Vector3){ p1.x, flip ? yHand : yMid, p1.z },
+                           0.007f, 0.007f, 4, iron);
+        }
+    }
+}
+
+/* Where the red cable ends: a blast-valve lever on the front of the burner.
+ * Pulling the ceiling handle drags this lever down. */
+static Vector3 BurnerValveTip(float pull01)
+{
+    Vector3 pivot = { -0.05f, 2.28f, -0.20f };
+    float ang = Lerpf(0.55f, 2.15f, Clampf(pull01, 0.0f, 1.0f));
+    return (Vector3){
+        pivot.x - 0.04f,
+        pivot.y + cosf(ang) * 0.16f,
+        pivot.z - sinf(ang) * 0.16f
+    };
+}
+
+static void DrawCoil(float cx, float cz, float y0, float y1, float radius, int turns, Color color)
+{
+    const int segPerTurn = 7;
+    int n = turns * segPerTurn;
+    Vector3 prev = { cx + radius, y0, cz };
+    for (int i = 1; i <= n; i++) {
+        float t = (float)i / (float)n;
+        float a = t * (float)turns * 2.0f * (float)M_PI;
+        Vector3 p = {
+            cx + cosf(a) * radius,
+            Lerpf(y0, y1, t),
+            cz + sinf(a) * radius
+        };
+        DrawCylinderEx(prev, p, 0.016f, 0.016f, 5, color);
+        prev = p;
+    }
+}
+
+/* One tongue of the burner flame. `tip` already includes flicker-free aim;
+ * this only wobbles it so neighbouring jets do not fuse into a prism. */
+static void DrawFlameJet(Vector3 base, Vector3 tip, float width, float time, int seed)
+{
+    float phase = time * (7.2f + (float)(seed % 5) * 0.4f) + (float)seed * 1.7f;
+    float flick = 0.78f + 0.22f * sinf(phase);
+    Vector3 aimed = {
+        Lerpf(base.x, tip.x, flick) + 0.025f * sinf(phase * 1.6f),
+        Lerpf(base.y, tip.y, flick),
+        Lerpf(base.z, tip.z, flick) + 0.025f * cosf(phase * 1.3f)
+    };
+    Vector3 mid = {
+        Lerpf(base.x, aimed.x, 0.40f),
+        Lerpf(base.y, aimed.y, 0.38f),
+        Lerpf(base.z, aimed.z, 0.40f)
+    };
+    float w = width * (0.88f + 0.12f * sinf(phase * 2.1f));
+    Color root = { 180, 40, 16, 200 };
+    Color outer = { 255, 78, 18, 115 };
+    Color body = { 255, 156, 32, 175 };
+    Color core = { 255, 236, 190, 210 };
+    DrawCylinderEx(base, mid, w * 0.20f, w * 0.55f, 5, root);
+    DrawCylinderEx(base, mid, w * 0.10f, w * 0.95f, 5, outer);
+    DrawCylinderEx(mid, aimed, w * 0.70f, w * 0.04f, 4, body);
+    DrawCylinderEx(base, (Vector3){
+                       Lerpf(base.x, aimed.x, 0.62f),
+                       Lerpf(base.y, aimed.y, 0.62f),
+                       Lerpf(base.z, aimed.z, 0.62f)
+                   }, w * 0.04f, w * 0.16f, 4, core);
+}
+
+/* Double burner hung in the open centre of the load frame. Coils, skirt and
+ * blast valve stay put; the flame is only drawn while the red handle is down. */
+static void DrawBurner(const Scene* s)
+{
+    Color steel = { 176, 182, 190, 255 };
+    Color steelDark = { 52, 56, 62, 255 };
+    Color skirtCol = { 72, 78, 86, 255 };
+    Color copper = { 176, 102, 54, 255 };
+    Color hose = { 26, 28, 32, 255 };
+    Color brass = { 198, 156, 74, 255 };
+    Color valveRed = { 196, 46, 48, 255 };
+
+    const float half = 0.17f;
+    const float yb = 2.36f;
+    const float yt = 2.74f;
+    const float ys = 2.46f;
+    const float hx = BASKET_HALF_X;
+    const float hz = BASKET_HALF_Z;
+
+    if (s->flame > 0.05f) {
+        skirtCol.r = (unsigned char)Lerpf((float)skirtCol.r, 168.0f, s->flame);
+        skirtCol.g = (unsigned char)Lerpf((float)skirtCol.g, 86.0f, s->flame);
+        skirtCol.b = (unsigned char)Lerpf((float)skirtCol.b, 48.0f, s->flame);
+    }
+
+    Vector3 mount[4] = {
+        { -hx + 0.10f, FRAME_Y + 0.03f, -hz + 0.06f },
+        {  hx - 0.10f, FRAME_Y + 0.03f, -hz + 0.06f },
+        {  hx - 0.10f, FRAME_Y + 0.03f,  hz - 0.06f },
+        { -hx + 0.10f, FRAME_Y + 0.03f,  hz - 0.06f }
+    };
+    Vector3 foot[4] = {
+        { -half, yb, -half },
+        {  half, yb, -half },
+        {  half, yb,  half },
+        { -half, yb,  half }
+    };
+    for (int i = 0; i < 4; i++) DrawCylinderEx(mount[i], foot[i], 0.016f, 0.012f, 5, steel);
+
+    for (int i = 0; i < 4; i++) {
+        DrawCube((Vector3){ foot[i].x, (yb + yt) * 0.5f, foot[i].z }, 0.026f, yt - yb, 0.026f, steel);
+    }
+
+    const Vector3 rim[4] = {
+        { -half, 0, -half }, { half, 0, -half }, { half, 0, half }, { -half, 0, half }
+    };
+    const float lip = half + 0.03f;
+    const Vector3 lipC[4] = {
+        { -lip, 0, -lip }, { lip, 0, -lip }, { lip, 0, lip }, { -lip, 0, lip }
+    };
+    for (int i = 0; i < 4; i++) {
+        int n = (i + 1) & 3;
+        DrawBar((Vector3){ rim[i].x, yb, rim[i].z }, (Vector3){ rim[n].x, yb, rim[n].z }, 0.02f, steelDark);
+        DrawBar((Vector3){ lipC[i].x, yt, lipC[i].z }, (Vector3){ lipC[n].x, yt, lipC[n].z }, 0.022f, steel);
+    }
+
+    /* Lower skirt is closed. The upper half stays open so the coils read. */
+    float skh = ys - yb;
+    float sky = (yb + ys) * 0.5f;
+    float span = half * 2.0f - 0.04f;
+    DrawCube((Vector3){ 0, sky, -half + 0.008f }, span, skh, 0.012f, skirtCol);
+    DrawCube((Vector3){ 0, sky,  half - 0.008f }, span, skh, 0.012f, skirtCol);
+    DrawCube((Vector3){ -half + 0.008f, sky, 0 }, 0.012f, skh, span, skirtCol);
+    DrawCube((Vector3){  half - 0.008f, sky, 0 }, 0.012f, skh, span, skirtCol);
+
+    DrawCylinder((Vector3){ 0.0f, 2.18f, 0.0f }, 0.05f, 0.07f, 0.16f, 8, steelDark);
+    DrawCylinder((Vector3){ 0.0f, 2.32f, 0.0f }, 0.09f, 0.05f, 0.04f, 8, steel);
+    DrawCylinderEx((Vector3){ -0.16f, 2.34f, 0 }, (Vector3){ 0.16f, 2.34f, 0 }, 0.016f, 0.016f, 6, steelDark);
+
+    float pull = s->handles.h[HANDLE_BURNER].pull / HANDLE_MAX_PULL;
+    Vector3 pivot = { -0.05f, 2.28f, -0.20f };
+    Vector3 tip = BurnerValveTip(pull);
+    DrawSphere(pivot, 0.022f, brass);
+    DrawCylinderEx(pivot, tip, 0.013f, 0.008f, 5, valveRed);
+    DrawSphere(tip, 0.016f, valveRed);
+
+    DrawRope((Vector3){ -0.16f, 2.34f, 0.0f }, (Vector3){ -hx + 0.06f, FRAME_Y, -0.06f }, 0.12f, 0.010f, hose);
+    DrawRope((Vector3){  0.16f, 2.34f, 0.0f }, (Vector3){  hx - 0.06f, FRAME_Y, -0.06f }, 0.12f, 0.010f, hose);
+
+    Color coil = copper;
+    if (s->flame > 0.15f) {
+        coil.r = (unsigned char)Lerpf((float)copper.r, 230.0f, s->flame);
+        coil.g = (unsigned char)Lerpf((float)copper.g, 150.0f, s->flame);
+        coil.b = (unsigned char)Lerpf((float)copper.b, 70.0f, s->flame);
+    }
+    DrawCoil(-0.055f, 0.0f, 2.44f, 2.64f, 0.046f, 3, coil);
+    DrawCoil( 0.055f, 0.0f, 2.44f, 2.64f, 0.046f, 3, coil);
+
+    Vector3 jets[8];
+    for (int side = 0; side < 2; side++) {
+        float cx = side ? 0.055f : -0.055f;
+        for (int k = 0; k < 4; k++) {
+            float a = ((float)k + 0.5f) / 4.0f * 2.0f * (float)M_PI;
+            Vector3 base = { cx + cosf(a) * 0.028f, 2.64f, sinf(a) * 0.028f };
+            DrawCylinder(base, 0.014f, 0.018f, 0.04f, 5, steelDark);
+            jets[side * 4 + k] = (Vector3){ base.x, base.y + 0.04f, base.z };
+        }
+    }
+
+    /* Pilot lights stay lit so the burner reads even with the handle up. */
+    Color pilot = { 150, 206, 255, 230 };
+    DrawCylinder(jets[0], 0.0f, 0.010f, 0.08f, 4, pilot);
+    DrawCylinder(jets[4], 0.0f, 0.010f, 0.08f, 4, pilot);
+
+    if (s->flame > 0.04f) {
+        BeginBlendMode(BLEND_ALPHA);
+        rlDisableDepthMask();
+        rlDisableBackfaceCulling();
+        float time = (float)GetTime();
+        /* Two columns, one over each coil, fanned apart so they stay readable. */
+        for (int i = 0; i < 8; i++) {
+            float side = (i < 4) ? -1.0f : 1.0f;
+            float vary = 0.72f + 0.28f * (float)((i * 3) % 5) / 4.0f;
+            float h = (0.55f + s->flame * 1.05f) * vary;
+            float spread = 0.05f + s->flame * 0.10f;
+            float ang = ((float)(i % 4) + 0.5f) / 4.0f * 2.0f * (float)M_PI;
+            Vector3 tip = {
+                jets[i].x + cosf(ang) * spread + side * 0.04f * s->flame,
+                jets[i].y + h,
+                jets[i].z + sinf(ang) * spread
+            };
+            DrawFlameJet(jets[i], tip, 0.055f + s->flame * 0.03f, time, i);
+        }
+        rlEnableBackfaceCulling();
+        rlEnableDepthMask();
+        EndBlendMode();
+    }
+}
+
 static void DrawBasket(const Scene* s)
 {
     Color wicker = { 176, 124, 64, 255 };
     Color wickerDark = { 132, 86, 42, 255 };
     Color wood = { 92, 64, 40, 255 };
-    Color metal = { 72, 78, 86, 255 };
     Color rope = { 92, 74, 52, 255 };
 
     DrawCube((Vector3){ 0, 0.05f, 0 }, BASKET_HALF_X * 2.0f, 0.10f, BASKET_HALF_Z * 2.0f, (Color){ 120, 84, 48, 255 });
@@ -544,7 +825,20 @@ static void DrawBasket(const Scene* s)
         DrawCube((Vector3){ -hx, y, 0 }, t, 0.10f, hz * 2.0f, c);
         DrawCube((Vector3){ hx, y, 0 }, t, 0.10f, hz * 2.0f, c);
     }
+    /* Vertical stakes so the bands read as a weave, not stacked planks. */
+    Color stake = { 108, 70, 36, 255 };
+    float stakeH = BASKET_RIM_Y - 0.16f;
+    float stakeY = 0.08f + stakeH * 0.5f;
+    for (float x = -hx + 0.18f; x <= hx - 0.12f; x += 0.20f) {
+        DrawCube((Vector3){ x, stakeY, -hz - 0.02f }, 0.026f, stakeH, 0.018f, stake);
+        DrawCube((Vector3){ x, stakeY,  hz + 0.02f }, 0.026f, stakeH, 0.018f, stake);
+    }
+    for (float z = -hz + 0.18f; z <= hz - 0.12f; z += 0.22f) {
+        DrawCube((Vector3){ -hx - 0.02f, stakeY, z }, 0.018f, stakeH, 0.026f, stake);
+        DrawCube((Vector3){  hx + 0.02f, stakeY, z }, 0.018f, stakeH, 0.026f, stake);
+    }
     DrawCube((Vector3){ 0, BASKET_RIM_Y, 0 }, hx * 2.0f + 0.06f, 0.06f, hz * 2.0f + 0.06f, (Color){ 196, 148, 78, 255 });
+    DrawGuardRail();
 
     Vector3 posts[4] = {
         { -hx, 0, -hz }, { hx, 0, -hz }, { hx, 0, hz }, { -hx, 0, hz }
@@ -557,15 +851,7 @@ static void DrawBasket(const Scene* s)
     DrawCube((Vector3){ -hx, FRAME_Y, 0 }, 0.05f, 0.05f, hz * 2.0f, wood);
     DrawCube((Vector3){ hx, FRAME_Y, 0 }, 0.05f, 0.05f, hz * 2.0f, wood);
 
-    /* Burner hung under the frame, in the mouth of the envelope. */
-    DrawCylinder((Vector3){ 0, 2.15f, 0 }, 0.16f, 0.16f, 0.22f, 8, metal);
-    DrawCylinder((Vector3){ 0, 1.98f, 0 }, 0.07f, 0.10f, 0.12f, 8, (Color){ 40, 42, 48, 255 });
-    if (s->flame > 0.05f) {
-        float h = 0.35f + s->flame * 0.85f;
-        Color flame = { 255, (unsigned char)(170 + 60 * s->flame), 40, 230 };
-        DrawCylinder((Vector3){ 0, 2.05f + h * 0.5f, 0 }, 0.02f, 0.10f + s->flame * 0.08f, h, 6, flame);
-        DrawSphere((Vector3){ 0, 2.15f + h, 0 }, 0.08f + s->flame * 0.06f, (Color){ 255, 220, 120, 180 });
-    }
+    DrawBurner(s);
 
     /* Suspension lines from the skirt of the envelope down to the posts. */
     float skirtY = Lerpf(ENVELOPE_TOP_Y, ENVELOPE_MOUTH_Y, 0.78f);
@@ -732,9 +1018,10 @@ void Scene_Draw(Scene* s, Vector3 eye)
     float rx, ry, rz, gx, gy, gz;
     Handle_GripPosition(&s->handles.h[HANDLE_BURNER], &rx, &ry, &rz);
     Handle_GripPosition(&s->handles.h[HANDLE_VENT], &gx, &gy, &gz);
-    float redSag = 0.25f * (1.0f - s->handles.h[HANDLE_BURNER].pull / HANDLE_MAX_PULL);
+    float redSag = 0.18f * (1.0f - s->handles.h[HANDLE_BURNER].pull / HANDLE_MAX_PULL);
     float greenSag = 0.8f * (1.0f - s->handles.h[HANDLE_VENT].pull / HANDLE_MAX_PULL);
-    DrawRope((Vector3){ rx, ry, rz }, (Vector3){ 0.12f, 2.20f, 0.0f }, redSag, 0.008f, red);
+    DrawRope((Vector3){ rx, ry, rz }, BurnerValveTip(s->handles.h[HANDLE_BURNER].pull / HANDLE_MAX_PULL),
+             redSag, 0.008f, red);
     DrawRope((Vector3){ gx, gy, gz }, (Vector3){ 0.15f, ENVELOPE_TOP_Y, 0.0f }, greenSag, 0.008f, green);
 
     if (s->labelsReady) {
