@@ -33,9 +33,22 @@ float Terrain_GroundAt(float x, float z);
 /* Distance LOD. Grids are nested by halves (16, 8, 4, 2, 1) so a coarse
  * edge is a subset of the fine one. Border samples are snapped onto the
  * coarser edge, and the height everywhere else is the real field, so two
- * tiles that share an edge occupy the same line. */
+ * tiles that share an edge occupy the same line.
+ * Thresholds and the draw distance can be changed from the command line. */
+#define TERRAIN_VIEW_DEFAULT (11.0f * TERRAIN_CHUNK_SIZE)
+#define TERRAIN_VIEW_MAX (24.0f * TERRAIN_CHUNK_SIZE)
+
 int Terrain_LodForDistance(float distMeters);
 int Terrain_GridForLod(int lod);
+
+/* Clamp and store the draw distance. The haze fades across the same
+ * fraction of it as the default 704 m view. Returns the applied value. */
+float Terrain_SetViewDistance(float meters);
+float Terrain_ViewDistance(void);
+
+/* Four ascending distances, in metres, where the mesh steps to the next
+ * coarser grid. Past the last one every chunk is a single quad. */
+void Terrain_SetLodThresholds(float d0, float d1, float d2, float d3);
 
 /* One grid sample. When it sits on the border with a coarser neighbour,
  * `snapped` is set and y lies on that neighbour's edge instead of the

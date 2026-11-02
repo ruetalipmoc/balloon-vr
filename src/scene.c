@@ -12,8 +12,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_CHUNKS 560
-#define CHUNK_RADIUS 11
+/* 24 chunks * 64 m = TERRAIN_VIEW_MAX. Kept an integer so the slot array
+ * is a real compile-time size, not a variable-length array. */
+#define CHUNK_RADIUS_MAX 24
+#define MAX_CHUNKS ((CHUNK_RADIUS_MAX * 2 + 1) * (CHUNK_RADIUS_MAX * 2 + 1))
 #define MAX_PARTICLES 192
 
 typedef struct Slot {
@@ -499,10 +501,19 @@ static Slot* AllocSlot(Scene* s)
     return NULL;
 }
 
+static int ChunkRadius(void)
+{
+    int radius = (int)ceilf(Terrain_ViewDistance() / TERRAIN_CHUNK_SIZE);
+    if (radius < 1) radius = 1;
+    if (radius > CHUNK_RADIUS_MAX) radius = CHUNK_RADIUS_MAX;
+    return radius;
+}
+
 static void UpdateChunks(Scene* s)
 {
     int ccx = (int)floorf(s->balloon.x / TERRAIN_CHUNK_SIZE);
     int ccz = (int)floorf(s->balloon.z / TERRAIN_CHUNK_SIZE);
+    int radius = ChunkRadius();
 
     for (int i = 0; i < MAX_CHUNKS; i++) {
         if (!s->slots[i].occupied) continue;
@@ -510,14 +521,14 @@ static void UpdateChunks(Scene* s)
         int dz = s->slots[i].cz - ccz;
         if (dx < 0) dx = -dx;
         if (dz < 0) dz = -dz;
-        if (dx > CHUNK_RADIUS || dz > CHUNK_RADIUS) {
+        if (dx > radius || dz > radius) {
             ChunkMesh_Free(&s->slots[i].mesh);
             s->slots[i].occupied = 0;
         }
     }
 
-    for (int dz = -CHUNK_RADIUS; dz <= CHUNK_RADIUS; dz++) {
-        for (int dx = -CHUNK_RADIUS; dx <= CHUNK_RADIUS; dx++) {
+    for (int dz = -radius; dz <= radius; dz++) {
+        for (int dx = -radius; dx <= radius; dx++) {
             int cx = ccx + dx;
             int cz = ccz + dz;
             float mx = ((float)cx + 0.5f) * TERRAIN_CHUNK_SIZE;

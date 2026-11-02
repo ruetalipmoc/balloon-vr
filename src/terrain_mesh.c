@@ -121,9 +121,14 @@ static Color ApplyHaze(Color c, float fog)
 
 static float FogAmount(float dist)
 {
-    /* Crisp through the near rings. The far LOD (past ~520 m) is where the
-     * ground gives up its colour and turns blue. */
-    float t = (dist - 220.0f) / 620.0f;
+    /* Same shape as the default 704 m view: colour holds, then drains to
+     * blue, and is gone a little past the loaded edge. */
+    float view = Terrain_ViewDistance();
+    float start = view * (220.0f / TERRAIN_VIEW_DEFAULT);
+    float end = view * (840.0f / TERRAIN_VIEW_DEFAULT);
+    float span = end - start;
+    if (span < 1.0f) span = 1.0f;
+    float t = (dist - start) / span;
     if (t <= 0.0f) return 0.0f;
     if (t >= 1.0f) return 1.0f;
     return t * t * (3.0f - 2.0f * t);

@@ -170,6 +170,29 @@ static void TestHandles(void)
     CHECK(!handles.h[HANDLE_BURNER].active);
 }
 
+static void TestLodConfig(void)
+{
+    Terrain_SetLodThresholds(50.0f, 80.0f, 120.0f, 200.0f);
+    CHECK(Terrain_LodForDistance(40.0f) == 0);
+    CHECK(Terrain_LodForDistance(60.0f) == 1);
+    CHECK(Terrain_LodForDistance(100.0f) == 2);
+    CHECK(Terrain_LodForDistance(150.0f) == 3);
+    CHECK(Terrain_LodForDistance(250.0f) == 4);
+
+    float small = Terrain_SetViewDistance(10.0f);
+    CHECK(fabsf(small - TERRAIN_CHUNK_SIZE) < 0.1f);
+    float huge = Terrain_SetViewDistance(10000.0f);
+    CHECK(fabsf(huge - TERRAIN_VIEW_MAX) < 0.1f);
+    float back = Terrain_SetViewDistance(TERRAIN_VIEW_DEFAULT);
+    CHECK(fabsf(back - TERRAIN_VIEW_DEFAULT) < 0.1f);
+    CHECK(fabsf(Terrain_ViewDistance() - TERRAIN_VIEW_DEFAULT) < 0.1f);
+
+    /* Restore the bands the seam test relies on. */
+    Terrain_SetLodThresholds(100.0f, 200.0f, 340.0f, 520.0f);
+    CHECK(Terrain_LodForDistance(150.0f) == 1);
+    CHECK(Terrain_LodForDistance(640.0f) == 4);
+}
+
 int main(void)
 {
     TestWind();
@@ -177,6 +200,7 @@ int main(void)
     TestSeams();
     TestBalloon();
     TestHandles();
+    TestLodConfig();
     if (g_fails) {
         fprintf(stderr, "%d check(s) failed\n", g_fails);
         return 1;

@@ -184,13 +184,38 @@ float Terrain_GroundAt(float x, float z)
     return h;
 }
 
+static float g_viewDistance = TERRAIN_VIEW_DEFAULT;
+static float g_lod[4] = { 100.0f, 200.0f, 340.0f, 520.0f };
+
+float Terrain_SetViewDistance(float meters)
+{
+    if (meters < TERRAIN_CHUNK_SIZE) meters = TERRAIN_CHUNK_SIZE;
+    if (meters > TERRAIN_VIEW_MAX) meters = TERRAIN_VIEW_MAX;
+    g_viewDistance = meters;
+    return g_viewDistance;
+}
+
+float Terrain_ViewDistance(void)
+{
+    return g_viewDistance;
+}
+
+void Terrain_SetLodThresholds(float d0, float d1, float d2, float d3)
+{
+    g_lod[0] = d0;
+    g_lod[1] = d1;
+    g_lod[2] = d2;
+    g_lod[3] = d3;
+}
+
 int Terrain_LodForDistance(float distMeters)
 {
-    /* Bands are wider than a chunk, so edge-adjacent chunks differ by at most one level. */
-    if (distMeters < 100.0f) return 0;
-    if (distMeters < 200.0f) return 1;
-    if (distMeters < 340.0f) return 2;
-    if (distMeters < 520.0f) return 3;
+    /* Bands should be wider than a chunk (64 m) so a border steps by one
+     * level. Closer bands still stitch, they just change more abruptly. */
+    if (distMeters < g_lod[0]) return 0;
+    if (distMeters < g_lod[1]) return 1;
+    if (distMeters < g_lod[2]) return 2;
+    if (distMeters < g_lod[3]) return 3;
     return 4;
 }
 

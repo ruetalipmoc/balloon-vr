@@ -3,6 +3,7 @@
  * Headset: squeeze either ceiling handle and pull it down. The left wrist
  * carries the instrument. */
 #include "scene.h"
+#include "terrain.h"
 #include "world.h"
 #include "xr_session.h"
 
@@ -179,21 +180,87 @@ static void UpdateDesktopLook(void)
     if (g_pitch < -1.20f) g_pitch = -1.20f;
 }
 
+static int ParseFloat(const char* s, float* out)
+{
+    if (!s || !*s) return 0;
+    char* end = NULL;
+    float v = strtof(s, &end);
+    if (end == s || *end != '\0') return 0;
+    *out = v;
+    return 1;
+}
+
+/* "100,200,340,520" — exactly four ascending positive distances. */
+static int ParseLod(const char* s, float d[4])
+{
+    char buf[128];
+    size_t n = 0;
+    if (!s) return 0;
+    while (s[n] != '\0') {
+        if (n + 1 >= sizeof(buf)) return 0;
+        n++;
+    }
+    memcpy(buf, s, n + 1);
+    int count = 0;
+    char* tok = strtok(buf, ",");
+    while (tok) {
+        while (*tok == ' ') tok++;
+        char* tail = tok + strlen(tok);
+        while (tail > tok && tail[-1] == ' ') *--tail = '\0';
+        if (count >= 4 || !ParseFloat(tok, &d[count]) || !(d[count] > 0.0f)) return 0;
+        count++;
+        tok = strtok(NULL, ",");
+    }
+    if (count != 4) return 0;
+    return d[0] < d[1] && d[1] < d[2] && d[2] < d[3];
+}
+
+static void PrintUsage(void)
+{
+    printf("balloon-vr [--desktop] [--view METRES] [--lod D0,D1,D2,D3]\n");
+    printf("  Headset: pull the red ceiling handle to burn, the green one to vent.\n");
+    printf("  Desktop: mouse look, F/left mouse burns, G/right mouse vents.\n");
+    printf("  --view   Ground draw distance in metres (default %.0f, max %.0f).\n",
+           TERRAIN_VIEW_DEFAULT, TERRAIN_VIEW_MAX);
+    printf("           Haze fades to the sky across that distance.\n");
+    printf("  --lod    Four ascending distances, in metres, where detail drops\n");
+    printf("           (default 100,200,340,520). Past the last, one quad per chunk.\n");
+    printf("           A step narrower than a chunk (64 m) changes more abruptly.\n");
+}
+
 int main(int argc, char** argv)
 {
     int forceDesktop = 0;
+    float view = TERRAIN_VIEW_DEFAULT;
+    float lod[4] = { 100.0f, 200.0f, 340.0f, 520.0f };
 #ifdef __EMSCRIPTEN__
     forceDesktop = 1;
 #endif
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--desktop") == 0) forceDesktop = 1;
         else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            printf("balloon-vr [--desktop]\n");
-            printf("  Headset: pull the red ceiling handle to burn, the green one to vent.\n");
-            printf("  Desktop: mouse look, F/left mouse burns, G/right mouse vents.\n");
+            PrintUsage();
             return 0;
+        } else if (strcmp(argv[i], "--view") == 0) {
+            if (i + 1 >= argc || !ParseFloat(argv[++i], &view) || !(view > 0.0f)) {
+                fprintf(stderr, "bad --view (want metres, e.g. 800)\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--lod") == 0) {
+            if (i + 1 >= argc || !ParseLod(argv[++i], lod)) {
+                fprintf(stderr, "bad --lod (want four ascending metres, e.g. 80,160,300,500)\n");
+                return 1;
+            }
+        } else {
+            fprintf(stderr, "unknown option %s\n", argv[i]);
+            PrintUsage();
+            return 1;
         }
     }
+    view = Terrain_SetViewDistance(view);
+    Terrain_SetLodThresholds(lod[0], lod[1], lod[2], lod[3]);
+    printf("view %.0f m   lod %.0f, %.0f, %.0f, %.0f m\n",
+           view, lod[0], lod[1], lod[2], lod[3]);
 
     const char* pitchEnv = getenv("BALLOON_PITCH");
     if (pitchEnv) g_pitch = strtof(pitchEnv, NULL);

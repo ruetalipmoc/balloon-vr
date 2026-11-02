@@ -46,6 +46,12 @@ If no OpenXR runtime is running, the same simulation opens in a window.
 
 `./balloon-vr --desktop` skips OpenXR entirely.
 
+```bash
+./balloon-vr --desktop --view 500 --lod 80,160,280,420
+```
+
+`--view` is how far the ground is drawn, in metres (default 704, max 1536). The blue haze stretches with it, so a shorter view fades sooner and a longer one stays coloured further out. `--lod` is four ascending distances where the mesh steps down (default `100,200,340,520`). Past the last one each chunk is a single quad. A step narrower than one chunk (64 m) still joins, but the change is sharper.
+
 The stage origin is recentered onto the middle of the basket floor the first
 time a head pose arrives. The basket is about 1.2 m by 1.0 m. Stay inside the
 rim; the world scrolls past a stationary gondola, which is what room-scale
