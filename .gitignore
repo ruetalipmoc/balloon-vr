@@ -1,0 +1,7 @@
+balloon-vr
+tests/test_sim
+third_party/
+*.o
+*.a
+*.so
+.cache/

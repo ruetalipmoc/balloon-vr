@@ -1,0 +1,120 @@
+/* Physics and terrain checks. No window, no OpenXR. */
+#include "../src/balloon.h"
+#include "../src/handles.h"
+#include "../src/terrain.h"
+#include "../src/wind.h"
+#include "../src/world.h"
+
+#include <math.h>
+#include <stdio.h>
+
+static int g_fails = 0;
+
+#define CHECK(cond) do { \
+    if (!(cond)) { \
+        fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); \
+        g_fails++; \
+    } \
+} while (0)
+
+static int Finite(float v) { return v == v && v < 1.0e20f && v > -1.0e20f; }
+
+static void TestWind(void)
+{
+    WindSample low, high;
+    Wind_AtAltitude(0.0f, &low);
+    Wind_AtAltitude(400.0f, &high);
+    CHECK(low.speed > 0.5f && low.speed < 30.0f);
+    CHECK(high.speed > 0.5f && high.speed < 30.0f);
+    CHECK(Finite(low.x) && Finite(low.z) && Finite(high.bearing));
+    float delta = fabsf(low.x - high.x) + fabsf(low.z - high.z);
+    CHECK(delta > 0.2f);
+    CHECK(Wind_Compass(0.0f)[0] == 'N');
+    CHECK(Wind_Compass(1.5707963f)[0] == 'E');
+}
+
+static void TestTerrain(void)
+{
+    float a = Terrain_Height(2400.0f, 1800.0f);
+    float b = Terrain_Height(2400.0f, 1800.0f);
+    CHECK(a == b);
+    CHECK(a >= 0.0f);
+    CHECK(Terrain_GroundAt(10.0f, -30.0f) >= Terrain_Height(10.0f, -30.0f) - 0.01f);
+    float nx, ny, nz;
+    Terrain_Normal(100.0f, 200.0f, &nx, &ny, &nz);
+    CHECK(ny > 0.0f);
+    CHECK(fabsf(nx * nx + ny * ny + nz * nz - 1.0f) < 0.02f);
+    float moisture = Terrain_Moisture(0.0f, 0.0f);
+    CHECK(moisture >= 0.0f && moisture <= 1.0f);
+}
+
+static void TestBalloon(void)
+{
+    Balloon balloon;
+    Balloon_Reset(&balloon, 0.0f, 0.0f, 200.0f);
+    float start = balloon.altitude;
+    balloon.burner = 1.0f;
+    for (int i = 0; i < 400; i++) Balloon_Update(&balloon, 0.02f, -1000.0f);
+    CHECK(balloon.altitude > start + 8.0f);
+    CHECK(Finite(balloon.temperature));
+    CHECK(Finite(balloon.vy));
+
+    Balloon_Reset(&balloon, 0.0f, 0.0f, 200.0f);
+    start = balloon.altitude;
+    balloon.vent = 1.0f;
+    for (int i = 0; i < 400; i++) Balloon_Update(&balloon, 0.02f, -1000.0f);
+    CHECK(balloon.altitude < start - 8.0f);
+
+    Balloon_Reset(&balloon, 12.0f, -4.0f, 80.0f);
+    for (int i = 0; i < 1500; i++) Balloon_Update(&balloon, 0.02f, -50.0f);
+    CHECK(Finite(balloon.altitude));
+    CHECK(Finite(balloon.vx) && Finite(balloon.vz));
+    CHECK(balloon.altitude >= -50.0f);
+}
+
+static void TestHandles(void)
+{
+    Handles handles;
+    Handles_Init(&handles);
+    HandInput hands[2];
+    for (int i = 0; i < 2; i++) {
+        hands[i].active = 0;
+        hands[i].grip = 0;
+        hands[i].x = hands[i].y = hands[i].z = 0;
+        hands[i].qx = hands[i].qy = hands[i].qz = 0;
+        hands[i].qw = 1;
+    }
+    Handles_Update(&handles, hands, 0.016f);
+    CHECK(!handles.h[HANDLE_BURNER].active);
+
+    hands[1].active = 1;
+    hands[1].grip = 1;
+    hands[1].x = HANDLE_RED_X;
+    hands[1].y = HANDLE_REST_Y - 0.30f;
+    hands[1].z = HANDLE_Z;
+    Handles_Update(&handles, hands, 0.016f);
+    CHECK(handles.h[HANDLE_BURNER].heldBy == 1);
+    CHECK(handles.h[HANDLE_BURNER].active);
+    CHECK(handles.h[HANDLE_BURNER].pull > 0.2f);
+    CHECK(!handles.h[HANDLE_VENT].active);
+
+    hands[1].grip = 0;
+    for (int i = 0; i < 200; i++) Handles_Update(&handles, hands, 0.016f);
+    CHECK(handles.h[HANDLE_BURNER].heldBy == -1);
+    CHECK(handles.h[HANDLE_BURNER].pull < 0.02f);
+    CHECK(!handles.h[HANDLE_BURNER].active);
+}
+
+int main(void)
+{
+    TestWind();
+    TestTerrain();
+    TestBalloon();
+    TestHandles();
+    if (g_fails) {
+        fprintf(stderr, "%d check(s) failed\n", g_fails);
+        return 1;
+    }
+    printf("sim checks passed\n");
+    return 0;
+}
