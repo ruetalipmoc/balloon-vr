@@ -67,19 +67,19 @@ static Color LerpColor(Color a, Color b, float t)
     return c;
 }
 
-static Color StripeColor(int slice)
+/* Four broad gores, two cloth colours. Thin multi-colour panels read as a
+ * pinwheel from the basket, which is the only place the envelope is seen. */
+static Color GoreColor(int slice)
 {
-    static const Color stripes[8] = {
-        { 196, 48, 54, 255 },
-        { 245, 232, 210, 255 },
-        { 226, 170, 64, 255 },
-        { 38, 140, 148, 255 },
-        { 245, 232, 210, 255 },
-        { 186, 42, 58, 255 },
-        { 32, 58, 112, 255 },
-        { 245, 232, 210, 255 }
-    };
-    return stripes[slice & 7];
+    if (slice & 4) return (Color){ 176, 52, 56, 255 };
+    return (Color){ 232, 220, 198, 255 };
+}
+
+/* Nomex skirt: the surface closest to the camera when looking up. One colour,
+ * so the mouth is a circle instead of where every gore happens to end. */
+static Color SkirtColor(void)
+{
+    return (Color){ 198, 156, 108, 255 };
 }
 
 static Mesh MakeFlatMesh(int vertCount, float* v, float* n, unsigned char* c, float* uv)
@@ -151,9 +151,12 @@ static float EnvelopeRadius(float t)
     /* t = 0 at the crown, t = 1 at the mouth. Fat teardrop, pinched at both ends. */
     float bell = sinf(powf(fmaxf(t, 0.0f), 0.70f) * (float)M_PI);
     float r = bell * ENVELOPE_RADIUS * (0.62f + 0.38f * sinf(t * (float)M_PI));
-    if (t > 0.84f) {
-        float u = (t - 0.84f) / 0.16f;
-        r = Lerpf(r, ENVELOPE_RADIUS * 0.26f, u);
+    /* Wide scoop rather than a tight nozzle. The passenger looks straight up
+     * this opening, so it should read as one round mouth. */
+    if (t > 0.86f) {
+        float u = (t - 0.86f) / 0.14f;
+        u = u * u * (3.0f - 2.0f * u);
+        r = Lerpf(r, ENVELOPE_RADIUS * 0.42f, u);
     }
     if (t < 0.06f) r = Lerpf(0.9f, r, t / 0.06f);
     return r;
@@ -218,7 +221,10 @@ static Mesh MakeEnvelope(void)
             Vector3 n10 = EnvelopeNormal(t0, a1);
             Vector3 n11 = EnvelopeNormal(t1, a1);
             Vector3 n01 = EnvelopeNormal(t1, a0);
-            Color col = StripeColor(k / 2);
+            /* Lower third is the plain skirt. Above it, four gores of four
+             * slices each: cream, red, cream, red. */
+            int skirt = (t0 >= 0.68f);
+            Color col = skirt ? SkirtColor() : GoreColor(k);
             PushTriN(v, n, c, uv, &i, p00, p10, p11, n00, n10, n11, col, col, col);
             PushTriN(v, n, c, uv, &i, p00, p11, p01, n00, n11, n01, col, col, col);
         }
@@ -229,7 +235,7 @@ static Mesh MakeEnvelope(void)
 static Mesh MakeCrown(void)
 {
     const int slices = 12;
-    float r = 1.35f;
+    float r = 1.05f;
     float y = 0.0f;
     int verts = slices * 3;
     float* v = (float*)MemAlloc((unsigned int)verts * 3 * sizeof(float));
@@ -1020,16 +1026,31 @@ static void DrawBasket(const Scene* s)
 
     DrawBurner(s);
 
-    /* Suspension lines from the skirt of the envelope down to the posts. */
-    float skirtY = Lerpf(ENVELOPE_TOP_Y, ENVELOPE_MOUTH_Y, 0.78f);
-    float skirtR = EnvelopeRadius(0.78f);
-    for (int i = 0; i < 8; i++) {
-        float a = (float)i / 8.0f * 2.0f * (float)M_PI;
-        Vector3 top = { cosf(a) * skirtR, skirtY, sinf(a) * skirtR };
-        Vector3 bot = posts[i & 3];
+    /* Four flying wires, one per corner. They stay on the post's azimuth so
+     * they drop beside the basket instead of crossing the view upward. */
+    for (int i = 0; i < 4; i++) {
+        float a = atan2f(posts[i].z, posts[i].x);
+        float attachT = 1.0f;
+        float y = Lerpf(ENVELOPE_TOP_Y, ENVELOPE_MOUTH_Y, attachT);
+        float r = EnvelopeRadius(attachT);
+        Vector3 top = { cosf(a) * r, y, sinf(a) * r };
+        Vector3 bot = posts[i];
         bot.y = FRAME_Y;
-        DrawRope(top, bot, 0.15f, 0.012f, rope);
+        DrawRope(top, bot, 0.06f, 0.014f, rope);
     }
+}
+
+static void DrawEnvelopeHoop(float t, float tubeR, Color color)
+{
+    const int n = 24;
+    Vector3 pts[24];
+    float y = Lerpf(ENVELOPE_TOP_Y, ENVELOPE_MOUTH_Y, t);
+    float r = EnvelopeRadius(t);
+    for (int i = 0; i < n; i++) {
+        float a = (float)i / (float)n * 2.0f * (float)M_PI;
+        pts[i] = (Vector3){ cosf(a) * r, y, sinf(a) * r };
+    }
+    DrawTube(pts, n, tubeR, 5, color, 1);
 }
 
 static void DrawHandle(const HandleState* h, Color color, int ring)
@@ -1168,6 +1189,9 @@ void Scene_Draw(Scene* s, Vector3 eye)
      * inside, so both sides have to draw. */
     rlDisableBackfaceCulling();
     DrawMesh(s->envelope, s->material, MatrixIdentity());
+    /* Mouth rim, and the tape where the plain skirt meets the gores. */
+    DrawEnvelopeHoop(1.0f, 0.055f, (Color){ 96, 64, 40, 255 });
+    DrawEnvelopeHoop(0.68f, 0.03f, (Color){ 120, 78, 48, 255 });
     Matrix crown = MatrixTranslate(0.0f, ENVELOPE_TOP_Y - 0.05f + s->ventOpen * 1.5f, 0.0f);
     DrawMesh(s->crown, s->material, crown);
     rlEnableBackfaceCulling();
