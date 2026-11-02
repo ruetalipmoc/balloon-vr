@@ -28,6 +28,8 @@ static Color LerpColor(Color a, Color b, float t)
     return c;
 }
 
+static Color ApplyHaze(Color c, float fog);
+
 static Color GroundColor(float x, float z, float h, float slopeY, float fog)
 {
     Color grassA = { 86, 166, 74, 255 };
@@ -37,7 +39,6 @@ static Color GroundColor(float x, float z, float h, float slopeY, float fog)
     Color sand = { 214, 196, 138, 255 };
     Color rock = { 142, 138, 128, 255 };
     Color snow = { 236, 242, 246, 255 };
-    Color sky = { 186, 214, 228, 255 };
     Color hedge = { 58, 104, 52, 255 };
     Color asphalt = { 74, 78, 84, 255 };
     Color crops[5] = {
@@ -101,15 +102,31 @@ static Color GroundColor(float x, float z, float h, float slopeY, float fog)
         c = LerpColor(c, snow, Clampf(snowT, 0.0f, 1.0f));
     }
     if (h < TERRAIN_WATER) c = (Color){ 46, 110, 150, 255 };
-    return LerpColor(c, sky, fog);
+    return ApplyHaze(c, fog);
+}
+
+/* Aerial perspective. Colour drains toward a hazy blue, then the last of it
+ * meets the sky horizon so the far edge of the world does not draw a line. */
+static Color ApplyHaze(Color c, float fog)
+{
+    if (fog <= 0.0f) return c;
+    Color haze = { 150, 188, 214, 255 };
+    Color horizon = { 232, 210, 180, 255 };
+    Color washed = LerpColor(c, haze, fog);
+    float intoSky = (fog - 0.75f) / 0.25f;
+    if (intoSky <= 0.0f) return washed;
+    if (intoSky > 1.0f) intoSky = 1.0f;
+    return LerpColor(washed, horizon, intoSky);
 }
 
 static float FogAmount(float dist)
 {
-    float fog = (dist - 190.0f) / 500.0f;
-    if (fog < 0.0f) fog = 0.0f;
-    if (fog > 0.72f) fog = 0.72f;
-    return fog;
+    /* Crisp through the near rings. The far LOD (past ~520 m) is where the
+     * ground gives up its colour and turns blue. */
+    float t = (dist - 220.0f) / 620.0f;
+    if (t <= 0.0f) return 0.0f;
+    if (t >= 1.0f) return 1.0f;
+    return t * t * (3.0f - 2.0f * t);
 }
 
 static void VertexShade(float x, float y, float z, float viewX, float viewZ,
@@ -299,7 +316,8 @@ static float LodMorph(int lod, float dist)
     float end = 100.0f;
     if (lod == 1) { start = 100.0f; end = 200.0f; }
     else if (lod == 2) { start = 200.0f; end = 340.0f; }
-    else if (lod >= 3) { start = 340.0f; end = 520.0f; }
+    else if (lod == 3) { start = 340.0f; end = 520.0f; }
+    else if (lod >= 4) return 0.0f;
     float t = (dist - start) / (end - start);
     float u = (t - 0.55f) / 0.45f;
     if (u <= 0.0f) return 0.0f;
@@ -459,8 +477,8 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
                     for (int k = 0; k < 3; k++) {
                         int id = tris[t][k];
                         float fog = FogAmount(hypotf(corner[id].x - viewX, corner[id].z - viewZ));
-                        Color water = LerpColor((Color){ 64, 150, 196, 255 },
-                                                (Color){ 186, 214, 228, 255 }, fog * 0.7f);
+                        Color water = { 64, 150, 196, 255 };
+                        water = ApplyHaze(water, fog);
                         water.a = 170;
                         PushVert(wv, wn, wc, wu, wi, corner[id].x, TERRAIN_WATER, corner[id].z,
                                  0, 1, 0, water);

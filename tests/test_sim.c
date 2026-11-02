@@ -51,9 +51,11 @@ static void TestSeams(void)
     CHECK(Terrain_GridForLod(1) == 8);
     CHECK(Terrain_GridForLod(2) == 4);
     CHECK(Terrain_GridForLod(3) == 2);
+    CHECK(Terrain_GridForLod(4) == 1);
     CHECK(Terrain_LodForDistance(150.0f) == 1);
     CHECK(Terrain_LodForDistance(260.0f) == 2);
     CHECK(Terrain_LodForDistance(400.0f) == 3);
+    CHECK(Terrain_LodForDistance(640.0f) == 4);
 
     TerrainSample fine = Terrain_Sample(16, 1, 16, 0.0f, 0.0f, size, 0, 0, viewX, viewZ);
     float expect = Lerpf(Terrain_Height(64.0f, 0.0f), Terrain_Height(64.0f, 8.0f), 0.5f);

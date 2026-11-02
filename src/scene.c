@@ -12,8 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_CHUNKS 256
-#define CHUNK_RADIUS 7
+#define MAX_CHUNKS 560
+#define CHUNK_RADIUS 11
 #define MAX_PARTICLES 192
 
 typedef struct Slot {
@@ -259,7 +259,7 @@ static Mesh MakeSky(void)
 {
     const int stacks = 7;
     const int slices = 14;
-    float radius = 880.0f;
+    float radius = 1400.0f;
     int verts = stacks * slices * 6;
     float* v = (float*)MemAlloc((unsigned int)verts * 3 * sizeof(float));
     float* n = (float*)MemAlloc((unsigned int)verts * 3 * sizeof(float));

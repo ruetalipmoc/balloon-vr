@@ -1,6 +1,6 @@
-/* Chunk meshes with distance LOD. Grids step by halves, and each chunk
- * eases onto the next grid before it switches so the boundary stays quiet.
- * Borders are stitched onto the coarser neighbour so LOD changes do not crack. */
+/* Chunk meshes with distance LOD. Grids step by halves down to one quad,
+ * easing onto the next grid before the switch. The farthest ring drops its
+ * colour into a blue haze. Borders stay stitched so LOD changes do not crack. */
 #ifndef BALLOON_TERRAIN_MESH_H
 #define BALLOON_TERRAIN_MESH_H
 

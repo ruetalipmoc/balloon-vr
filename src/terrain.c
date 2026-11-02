@@ -190,17 +190,20 @@ int Terrain_LodForDistance(float distMeters)
     if (distMeters < 100.0f) return 0;
     if (distMeters < 200.0f) return 1;
     if (distMeters < 340.0f) return 2;
-    return 3;
+    if (distMeters < 520.0f) return 3;
+    return 4;
 }
 
 int Terrain_GridForLod(int lod)
 {
-    /* Nested by halves: a coarse edge is a subset of every finer grid. */
+    /* Nested by halves: a coarse edge is a subset of every finer grid.
+     * The last level is a single quad; haze, not geometry, does the rest. */
     switch (lod) {
         case 0: return 16;
         case 1: return 8;
         case 2: return 4;
-        default: return 2;
+        case 3: return 2;
+        default: return 1;
     }
 }
 

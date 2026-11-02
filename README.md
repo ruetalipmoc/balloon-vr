@@ -23,7 +23,8 @@ On the **left wrist** a flat instrument shows:
 The landscape is generated from a fixed seed as you drift: rolling ground,
 river valleys and lakes, and broad regions of farmland (square fields),
 forest, open country and small towns. Detail steps down with distance, easing
-onto the next grid before it switches, and the far ground fades into the sky.
+onto the next grid before it switches. The farthest ground is a single quad
+per chunk and drains to a blue haze, then into the sky.
 There are no art assets — meshes, the wicker basket, the envelope and the
 watch face are built in code.
 
