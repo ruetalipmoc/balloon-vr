@@ -15,6 +15,33 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+
+static int g_webBurn = 0;
+static int g_webVent = 0;
+static int g_touching = 0;
+static Vector2 g_touchLast = { 0 };
+
+EMSCRIPTEN_KEEPALIVE
+void balloon_set_burn(int on) { g_webBurn = on ? 1 : 0; }
+
+EMSCRIPTEN_KEEPALIVE
+void balloon_set_vent(int on) { g_webVent = on ? 1 : 0; }
+
+EM_JS(void, Balloon_ExposeControls, (), {
+    Module._balloon_set_burn = Module._balloon_set_burn || Module["_balloon_set_burn"];
+    var burn = Module["_balloon_set_burn"] || Module._balloon_set_burn;
+    var vent = Module["_balloon_set_vent"] || Module._balloon_set_vent;
+    window.__balloonControls = {
+        burn: function (on) { if (burn) burn(on ? 1 : 0); },
+        vent: function (on) { if (vent) vent(on ? 1 : 0); },
+        ready: true
+    };
+    window.dispatchEvent(new Event("balloon-ready"));
+});
+#endif
+
 static int g_yawCaptured = 0;
 static float g_yaw = 0.0f;
 static float g_pitch = 0.22f;
@@ -89,15 +116,45 @@ static void DesktopHands(HandInput hands[2], Vector3 eye, int burn, int vent)
 
 static void DrawHint(int vr)
 {
+#ifdef __EMSCRIPTEN__
+    (void)vr;
+    const char* line = "Glisser pour regarder    F bruleur    G ou clic droit soupape";
+#else
     const char* line = vr
         ? "Squeeze a ceiling handle and pull down.  F burner   G vent   R recenter   Esc quit"
         : "Click to look.   F / left mouse burner (red)   G / right mouse vent (green)   Esc quit";
+#endif
     DrawRectangle(0, GetScreenHeight() - 36, GetScreenWidth(), 36, (Color){ 8, 16, 24, 180 });
     DrawText(line, 16, GetScreenHeight() - 26, 18, (Color){ 232, 244, 240, 255 });
 }
 
 static void UpdateDesktopLook(void)
 {
+#ifdef __EMSCRIPTEN__
+    /* No pointer lock: the preview frame often refuses it. Drag, or a finger,
+     * orbits the view. The left button is look, not the burner. */
+    if (GetTouchPointCount() > 0) {
+        Vector2 pos = GetTouchPosition(0);
+        if (!g_touching) {
+            g_touchLast = pos;
+            g_touching = 1;
+        } else {
+            g_yaw += (pos.x - g_touchLast.x) * 0.0045f;
+            g_pitch -= (pos.y - g_touchLast.y) * 0.0045f;
+            g_touchLast = pos;
+        }
+    } else {
+        g_touching = 0;
+        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            Vector2 delta = GetMouseDelta();
+            g_yaw += delta.x * 0.0032f;
+            g_pitch -= delta.y * 0.0032f;
+        }
+    }
+    if (g_pitch > 1.15f) g_pitch = 1.15f;
+    if (g_pitch < -1.20f) g_pitch = -1.20f;
+    return;
+#endif
     if (!g_yawCaptured) {
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) || IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
             g_yawCaptured = 1;
@@ -115,6 +172,9 @@ static void UpdateDesktopLook(void)
 int main(int argc, char** argv)
 {
     int forceDesktop = 0;
+#ifdef __EMSCRIPTEN__
+    forceDesktop = 1;
+#endif
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--desktop") == 0) forceDesktop = 1;
         else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -128,9 +188,19 @@ int main(int argc, char** argv)
     const char* pitchEnv = getenv("BALLOON_PITCH");
     if (pitchEnv) g_pitch = strtof(pitchEnv, NULL);
 
+#ifdef __EMSCRIPTEN__
+    int winW = EM_ASM_INT({ return Math.max(640, window.innerWidth || 1280); });
+    int winH = EM_ASM_INT({ return Math.max(480, window.innerHeight || 800); });
+    SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
+    InitWindow(winW, winH, "Montgolfiere");
+    /* WindowShouldClose already yields ~16 ms. Don't sleep a second time. */
+    SetTargetFPS(0);
+    SetExitKey(KEY_NULL);
+#else
     SetConfigFlags(FLAG_MSAA_4X_HINT);
     InitWindow(1440, 900, "Balloon VR");
     SetTargetFPS(72);
+#endif
     rlSetClipPlanes(0.05, 4000.0);
     srand(0xB411u);
 
@@ -143,10 +213,24 @@ int main(int argc, char** argv)
     int xr = 0;
     if (!forceDesktop) xr = XR_Init();
 
+#ifdef __EMSCRIPTEN__
+    Balloon_ExposeControls();
+#endif
+
     while (!WindowShouldClose() && !XR_WantsQuit()) {
         int session = xr && XR_IsSessionRunning();
-        int burn = IsKeyDown(KEY_F) || (!session && g_yawCaptured && IsMouseButtonDown(MOUSE_BUTTON_LEFT));
-        int vent = IsKeyDown(KEY_G) || (!session && g_yawCaptured && IsMouseButtonDown(MOUSE_BUTTON_RIGHT));
+#ifdef __EMSCRIPTEN__
+        (void)session;
+#endif
+        int burn = IsKeyDown(KEY_F);
+        int vent = IsKeyDown(KEY_G);
+#ifdef __EMSCRIPTEN__
+        burn = burn || g_webBurn;
+        vent = vent || g_webVent || IsMouseButtonDown(MOUSE_BUTTON_RIGHT);
+#else
+        burn = burn || (!session && g_yawCaptured && IsMouseButtonDown(MOUSE_BUTTON_LEFT));
+        vent = vent || (!session && g_yawCaptured && IsMouseButtonDown(MOUSE_BUTTON_RIGHT));
+#endif
         if (getenv("BALLOON_BURN")) burn = 1;
         if (getenv("BALLOON_VENT")) vent = 1;
         if (IsKeyPressed(KEY_R)) XR_Recenter();
