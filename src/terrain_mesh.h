@@ -1,5 +1,5 @@
-/* Chunk meshes with an aggressive distance LOD. Near chunks are faceted
- * hills; far chunks collapse to one or two quads tinted toward the sky.
+/* Chunk meshes with distance LOD. Grids step by halves, and each chunk
+ * eases onto the next grid before it switches so the boundary stays quiet.
  * Borders are stitched onto the coarser neighbour so LOD changes do not crack. */
 #ifndef BALLOON_TERRAIN_MESH_H
 #define BALLOON_TERRAIN_MESH_H

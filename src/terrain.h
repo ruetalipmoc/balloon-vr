@@ -30,8 +30,9 @@ void Terrain_Normal(float x, float z, float* nx, float* ny, float* nz);
  * poke through the floor. */
 float Terrain_GroundAt(float x, float z);
 
-/* Distance LOD. Grids are nested (16, 8, 2, 1) so a coarse edge is a
- * subset of the fine one and the two can be stitched. */
+/* Distance LOD. Grids are nested by halves (16, 8, 4, 2) so a coarse edge
+ * is a subset of the fine one and the two can be stitched. The mesh eases
+ * onto the next grid before the switch, so the ring is not a hard line. */
 int Terrain_LodForDistance(float distMeters);
 int Terrain_GridForLod(int lod);
 

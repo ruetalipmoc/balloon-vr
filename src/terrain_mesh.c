@@ -104,15 +104,19 @@ static Color GroundColor(float x, float z, float h, float slopeY, float fog)
     return LerpColor(c, sky, fog);
 }
 
+static float FogAmount(float dist)
+{
+    float fog = (dist - 190.0f) / 500.0f;
+    if (fog < 0.0f) fog = 0.0f;
+    if (fog > 0.72f) fog = 0.72f;
+    return fog;
+}
+
 static void VertexShade(float x, float y, float z, float viewX, float viewZ,
                         float* nx, float* ny, float* nz, Color* c)
 {
     Terrain_Normal(x, z, nx, ny, nz);
-    float dist = hypotf(x - viewX, z - viewZ);
-    float fog = (dist - 140.0f) / 520.0f;
-    if (fog < 0.0f) fog = 0.0f;
-    if (fog > 0.7f) fog = 0.7f;
-    *c = GroundColor(x, z, y, *ny, fog);
+    *c = GroundColor(x, z, y, *ny, FogAmount(hypotf(x - viewX, z - viewZ)));
 }
 
 /* Border samples that were pulled onto a coarser edge inherit that edge's
@@ -181,8 +185,18 @@ static void PushProp(ChunkMesh* out, int kind, float x, float y, float z, float 
     p->scale = scale;
 }
 
-/* Blocks whose centres fall in this chunk. Parks keep a tree instead of a roof. */
-static void AddCity(float x0, float z0, float size, ChunkMesh* out)
+static float FadeScale(float x, float z, float viewX, float viewZ, float begin, float end)
+{
+    float u = (hypotf(x - viewX, z - viewZ) - begin) / (end - begin);
+    if (u <= 0.0f) return 1.0f;
+    if (u >= 1.0f) return 0.0f;
+    float s = u * u * (3.0f - 2.0f * u);
+    return 1.0f - s;
+}
+
+/* Blocks whose centres fall in this chunk. Parks keep a tree instead of a roof.
+ * Scale eases off with distance so a building does not vanish on a ring. */
+static void AddCity(float x0, float z0, float size, float viewX, float viewZ, ChunkMesh* out)
 {
     const float block = TERRAIN_CITY_BLOCK;
     int i0 = (int)floorf(x0 / block);
@@ -200,24 +214,29 @@ static void AddCity(float x0, float z0, float size, ChunkMesh* out)
             if (py < TERRAIN_WATER + 1.0f) continue;
             unsigned int h = CellHash(ix, iz);
             if ((h % 11u) == 0u) {
-                PushProp(out, 0, px, py, pz, 0.0f, 1.35f);
+                float fade = FadeScale(px, pz, viewX, viewZ, 110.0f, 260.0f);
+                if (fade < 0.05f) continue;
+                PushProp(out, 0, px, py, pz, 0.0f, 1.35f * fade);
                 continue;
             }
+            float fade = FadeScale(px, pz, viewX, viewZ, 180.0f, 320.0f);
+            if (fade < 0.05f) continue;
             int tower = (h % 5u) == 0u;
             float scale = 1.1f + (float)(h % 100u) / 100.0f * 1.2f;
             if (tower) scale += 0.7f;
-            PushProp(out, tower ? 6 : 5, px, py, pz, 0.0f, scale);
+            PushProp(out, tower ? 6 : 5, px, py, pz, 0.0f, scale * fade);
         }
     }
 }
 
-static void AddProps(int cx, int cz, float x0, float z0, float size, int lod, ChunkMesh* out)
+static void AddProps(int cx, int cz, float x0, float z0, float size, int lod,
+                     float viewX, float viewZ, ChunkMesh* out)
 {
     (void)cx;
     (void)cz;
     out->propCount = 0;
-    AddCity(x0, z0, size, out);
-    if (lod > 1) return;
+    AddCity(x0, z0, size, viewX, viewZ, out);
+    if (lod > 2) return;
 
     const int cells = 5;
     float cell = size / (float)cells;
@@ -227,7 +246,6 @@ static void AddProps(int cx, int cz, float x0, float z0, float size, int lod, Ch
             int wx = (int)floorf(x0 / cell) + jx;
             int wz = (int)floorf(z0 / cell) + jz;
             unsigned int h = CellHash(wx, wz);
-            if (lod > 0 && (h % 3u) != 0u) continue;
             float px = x0 + ((float)jx + 0.18f + (float)(h & 255) / 255.0f * 0.64f) * cell;
             float pz = z0 + ((float)jz + 0.18f + (float)((h >> 8) & 255) / 255.0f * 0.64f) * cell;
             float py = Terrain_Height(px, pz);
@@ -235,12 +253,14 @@ static void AddProps(int cx, int cz, float x0, float z0, float size, int lod, Ch
             float nx, ny, nz;
             Terrain_Normal(px, pz, &nx, &ny, &nz);
             int zone = Terrain_Zone(px, pz);
-            float scale = 0.8f + (float)((h >> 12) % 100u) / 100.0f * 0.85f;
+            float fade = FadeScale(px, pz, viewX, viewZ, 110.0f, 260.0f);
+            if (fade < 0.05f) continue;
+            float scale = (0.8f + (float)((h >> 12) % 100u) / 100.0f * 0.85f) * fade;
 
             if (zone == TERRAIN_ZONE_CITY) continue;
             if (zone == TERRAIN_ZONE_FARM) {
                 if (ny < 0.9f) continue;
-                if ((h % 53u) == 0u) PushProp(out, 4, px, py, pz, 0.0f, 2.6f);
+                if ((h % 53u) == 0u) PushProp(out, 4, px, py, pz, 0.0f, 2.6f * fade);
                 else if ((h % 17u) == 0u) PushProp(out, 0, px, py, pz, (float)(h % 360u), scale);
                 continue;
             }
@@ -251,7 +271,7 @@ static void AddProps(int cx, int cz, float x0, float z0, float size, int lod, Ch
             }
             if (zone == TERRAIN_ZONE_FOREST) {
                 if ((h % 5u) == 0u) continue;
-                float tree = 2.4f + (float)((h >> 12) % 100u) / 100.0f * 1.8f;
+                float tree = (2.4f + (float)((h >> 12) % 100u) / 100.0f * 1.8f) * fade;
                 PushProp(out, (h % 3u) == 0u ? 1 : 0, px, py, pz, (float)(h % 360u), tree);
                 continue;
             }
@@ -262,13 +282,95 @@ static void AddProps(int cx, int cz, float x0, float z0, float size, int lod, Ch
             }
             /* Open country: a few trees, the odd farmhouse. */
             if ((h % 29u) == 0u && py < 36.0f) {
-                PushProp(out, 3, px, py, pz, 0.0f, 1.0f);
+                PushProp(out, 3, px, py, pz, 0.0f, fade);
                 continue;
             }
             if ((h % 4u) != 0u) continue;
             PushProp(out, 0, px, py, pz, (float)(h % 360u), scale);
         }
     }
+}
+
+/* 0 through the inner part of this level's ring, 1 at the outer edge,
+ * where the next chunk is already the coarser grid. */
+static float LodMorph(int lod, float dist)
+{
+    float start = 0.0f;
+    float end = 100.0f;
+    if (lod == 1) { start = 100.0f; end = 200.0f; }
+    else if (lod == 2) { start = 200.0f; end = 340.0f; }
+    else if (lod >= 3) { start = 340.0f; end = 520.0f; }
+    float t = (dist - start) / (end - start);
+    float u = (t - 0.55f) / 0.45f;
+    if (u <= 0.0f) return 0.0f;
+    if (u >= 1.0f) return 1.0f;
+    return u * u * (3.0f - 2.0f * u);
+}
+
+static int OnChunkBorder(float x, float z, float x0, float z0, float size)
+{
+    const float e = 0.08f;
+    return (x <= x0 + e || x >= x0 + size - e || z <= z0 + e || z >= z0 + size - e);
+}
+
+/* Height and normal of the next-coarser grid. A fully morphed vertex lands
+ * on the same surface the neighbouring chunk already draws. */
+static void CoarseSurface(float x, float z, float x0, float z0, float size, int coarse,
+                          float* y, float* nx, float* ny, float* nz)
+{
+    if (coarse < 1) coarse = 1;
+    float step = size / (float)coarse;
+    float fx = (x - x0) / step;
+    float fz = (z - z0) / step;
+    int ix = (int)floorf(fx);
+    int iz = (int)floorf(fz);
+    if (ix < 0) ix = 0;
+    if (iz < 0) iz = 0;
+    if (ix >= coarse) ix = coarse - 1;
+    if (iz >= coarse) iz = coarse - 1;
+    float tx = Clampf(fx - (float)ix, 0.0f, 1.0f);
+    float tz = Clampf(fz - (float)iz, 0.0f, 1.0f);
+    float xA = x0 + (float)ix * step;
+    float zA = z0 + (float)iz * step;
+    float h00 = Terrain_Height(xA, zA);
+    float h10 = Terrain_Height(xA + step, zA);
+    float h01 = Terrain_Height(xA, zA + step);
+    float h11 = Terrain_Height(xA + step, zA + step);
+    *y = Lerpf(Lerpf(h00, h10, tx), Lerpf(h01, h11, tx), tz);
+    float dhdx = Lerpf(h10 - h00, h11 - h01, tz) / step;
+    float dhdz = Lerpf(h01 - h00, h11 - h10, tx) / step;
+    float vx = -dhdx;
+    float vy = 1.0f;
+    float vz = -dhdz;
+    float len = sqrtf(vx * vx + vy * vy + vz * vz);
+    if (len < 1.0e-5f) len = 1.0f;
+    *nx = vx / len;
+    *ny = vy / len;
+    *nz = vz / len;
+}
+
+/* Interior only. Border vertices stay put: the fine side is snapped onto
+ * them, and moving either side would open a crack. */
+static void MorphCorner(TerrainSample* s, int lod, int grid, float x0, float z0, float size,
+                        float viewX, float viewZ, float* nx, float* ny, float* nz)
+{
+    if (OnChunkBorder(s->x, s->z, x0, z0, size)) return;
+    int coarse = grid / 2;
+    if (coarse < 1) return;
+    float m = LodMorph(lod, hypotf(s->x - viewX, s->z - viewZ));
+    if (m <= 0.001f) return;
+    float cy, cnx, cny, cnz;
+    CoarseSurface(s->x, s->z, x0, z0, size, coarse, &cy, &cnx, &cny, &cnz);
+    s->y = Lerpf(s->y, cy, m);
+    if (!nx) return;
+    float vx = Lerpf(*nx, cnx, m);
+    float vy = Lerpf(*ny, cny, m);
+    float vz = Lerpf(*nz, cnz, m);
+    float len = sqrtf(vx * vx + vy * vy + vz * vz);
+    if (len < 1.0e-5f) len = 1.0f;
+    *nx = vx / len;
+    *ny = vy / len;
+    *nz = vz / len;
 }
 
 int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh* out)
@@ -293,6 +395,10 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
             TerrainSample s10 = Terrain_Sample(jx + 1, jz, grid, x0, z0, size, cx, cz, viewX, viewZ);
             TerrainSample s11 = Terrain_Sample(jx + 1, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ);
             TerrainSample s01 = Terrain_Sample(jx, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ);
+            MorphCorner(&s00, lod, grid, x0, z0, size, viewX, viewZ, NULL, NULL, NULL);
+            MorphCorner(&s10, lod, grid, x0, z0, size, viewX, viewZ, NULL, NULL, NULL);
+            MorphCorner(&s11, lod, grid, x0, z0, size, viewX, viewZ, NULL, NULL, NULL);
+            MorphCorner(&s01, lod, grid, x0, z0, size, viewX, viewZ, NULL, NULL, NULL);
             if (s00.y < TERRAIN_WATER || s10.y < TERRAIN_WATER || s11.y < TERRAIN_WATER || s01.y < TERRAIN_WATER)
                 waterQuads++;
         }
@@ -309,8 +415,10 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
             };
             float nx[4], ny[4], nz[4];
             Color col[4];
-            for (int k = 0; k < 4; k++)
+            for (int k = 0; k < 4; k++) {
                 SampleShade(&corner[k], viewX, viewZ, &nx[k], &ny[k], &nz[k], &col[k]);
+                MorphCorner(&corner[k], lod, grid, x0, z0, size, viewX, viewZ, &nx[k], &ny[k], &nz[k]);
+            }
             /* Winding faces up (right-handed Y-up). The other order is culled
              * from the basket, which sits above the mesh. */
             int tris[2][3] = { { 0, 2, 1 }, { 0, 3, 2 } };
@@ -341,6 +449,8 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
                     Terrain_Sample(jx + 1, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ),
                     Terrain_Sample(jx, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ)
                 };
+                for (int k = 0; k < 4; k++)
+                    MorphCorner(&corner[k], lod, grid, x0, z0, size, viewX, viewZ, NULL, NULL, NULL);
                 if (!(corner[0].y < TERRAIN_WATER || corner[1].y < TERRAIN_WATER ||
                       corner[2].y < TERRAIN_WATER || corner[3].y < TERRAIN_WATER))
                     continue;
@@ -348,10 +458,7 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
                 for (int t = 0; t < 2; t++) {
                     for (int k = 0; k < 3; k++) {
                         int id = tris[t][k];
-                        float dist = hypotf(corner[id].x - viewX, corner[id].z - viewZ);
-                        float fog = (dist - 140.0f) / 520.0f;
-                        if (fog < 0.0f) fog = 0.0f;
-                        if (fog > 0.7f) fog = 0.7f;
+                        float fog = FogAmount(hypotf(corner[id].x - viewX, corner[id].z - viewZ));
                         Color water = LerpColor((Color){ 64, 150, 196, 255 },
                                                 (Color){ 186, 214, 228, 255 }, fog * 0.7f);
                         water.a = 170;
@@ -366,7 +473,7 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
         out->hasWater = 1;
     }
 
-    if (lod <= 2) AddProps(cx, cz, x0, z0, size, lod, out);
+    if (lod <= 2) AddProps(cx, cz, x0, z0, size, lod, viewX, viewZ, out);
     out->ready = 1;
     return 1;
 }

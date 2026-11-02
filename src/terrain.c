@@ -186,19 +186,21 @@ float Terrain_GroundAt(float x, float z)
 
 int Terrain_LodForDistance(float distMeters)
 {
-    if (distMeters < 90.0f) return 0;
-    if (distMeters < 180.0f) return 1;
-    if (distMeters < 320.0f) return 2;
+    /* Bands are wider than a chunk, so edge-adjacent chunks differ by at most one level. */
+    if (distMeters < 100.0f) return 0;
+    if (distMeters < 200.0f) return 1;
+    if (distMeters < 340.0f) return 2;
     return 3;
 }
 
 int Terrain_GridForLod(int lod)
 {
+    /* Nested by halves: a coarse edge is a subset of every finer grid. */
     switch (lod) {
         case 0: return 16;
         case 1: return 8;
-        case 2: return 2;
-        default: return 1;
+        case 2: return 4;
+        default: return 2;
     }
 }
 
