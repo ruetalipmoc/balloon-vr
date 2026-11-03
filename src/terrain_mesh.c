@@ -494,12 +494,6 @@ void Clip_Describe(int level, float viewX, float viewZ, ClipJob* job)
         job->seamR = job->holeR;
         job->seamB = job->holeB;
         job->seamT = job->holeT;
-        /* The coarser quads run a full cell under the finer ring. */
-        float tuck = s;
-        job->holeL += tuck;
-        job->holeR -= tuck;
-        job->holeB += tuck;
-        job->holeT -= tuck;
     }
     if (level + 1 < rings) {
         float S = Terrain_RingSpacing(level + 1);
@@ -557,6 +551,23 @@ static Color CSample(const Color* c, int stride, int n, int m, int i, int j)
     return c[j * stride + i];
 }
 
+/* Same lighting as the coarser ring: its vertices step by two fine cells. */
+static void CoarseNormal(const float* h, int stride, int n, int m, int i, int j, float step,
+                         float* nx, float* ny, float* nz)
+{
+    float hl = HSample(h, stride, n, m, i - 2, j);
+    float hr = HSample(h, stride, n, m, i + 2, j);
+    float hd = HSample(h, stride, n, m, i, j - 2);
+    float hu = HSample(h, stride, n, m, i, j + 2);
+    float span = 4.0f * step;
+    float dhx = (hl - hr) / span;
+    float dhz = (hd - hu) / span;
+    float len = sqrtf(dhx * dhx + 1.0f + dhz * dhz);
+    *nx = dhx / len;
+    *ny = 1.0f / len;
+    *nz = dhz / len;
+}
+
 /* Height, cover and normal of the coarser triangle under this vertex.
  * The fine vertex flattens onto that plane, so the two rings are the same
  * surface where they meet. */
@@ -601,36 +612,40 @@ static void CoarseSurface(const float* h, const Color* col, int stride, int n, i
     c->b = (unsigned char)(w0 * k0.b + w1 * k1.b + w2 * k2.b + 0.5f);
     c->a = (unsigned char)(w0 * k0.a + w1 * k1.a + w2 * k2.a + 0.5f);
 
-    float ex1 = (x1 - x0) * 2.0f * s;
-    float ez1 = (z1 - z0) * 2.0f * s;
-    float ey1 = y1 - y0;
-    float ex2 = (x2 - x0) * 2.0f * s;
-    float ez2 = (z2 - z0) * 2.0f * s;
-    float ey2 = y2 - y0;
-    float nxw = ey1 * ez2 - ey2 * ez1;
-    float nyw = ez1 * ex2 - ez2 * ex1;
-    float nzw = ex1 * ey2 - ex2 * ey1;
+    int i0, j0, i1, j1, i2, j2;
+    if (tx >= tz) {
+        i0 = ci; j0 = cj; i1 = ci + 2; j1 = cj + 2; i2 = ci + 2; j2 = cj;
+    } else {
+        i0 = ci; j0 = cj; i1 = ci; j1 = cj + 2; i2 = ci + 2; j2 = cj + 2;
+    }
+    float n0x, n0y, n0z, n1x, n1y, n1z, n2x, n2y, n2z;
+    CoarseNormal(h, stride, n, m, i0, j0, s, &n0x, &n0y, &n0z);
+    CoarseNormal(h, stride, n, m, i1, j1, s, &n1x, &n1y, &n1z);
+    CoarseNormal(h, stride, n, m, i2, j2, s, &n2x, &n2y, &n2z);
+    float nxw = n0x * w0 + n1x * w1 + n2x * w2;
+    float nyw = n0y * w0 + n1y * w1 + n2y * w2;
+    float nzw = n0z * w0 + n1z * w1 + n2z * w2;
     float len = sqrtf(nxw * nxw + nyw * nyw + nzw * nzw);
     if (len < 1.0e-5f) {
         *nx = 0.0f; *ny = 1.0f; *nz = 0.0f;
-    } else if (nyw < 0.0f) {
-        *nx = -nxw / len; *ny = -nyw / len; *nz = -nzw / len;
     } else {
         *nx = nxw / len; *ny = nyw / len; *nz = nzw / len;
     }
 }
 
 static void Skirt(float* v, float* n, unsigned char* col, float* uv, int* gi,
-                  float x0, float y0, float z0, float x1, float y1, float z1, Color c0, Color c1)
+                  float x0, float y0, float z0, float x1, float y1, float z1,
+                  float nx, float ny, float nz, Color c0, Color c1)
 {
-    const float drop = 12.0f;
+    /* Just enough to cover a raster crack. A tall skirt reads as a band. */
+    const float drop = 1.2f;
     int i = *gi;
-    PushVert(v, n, col, uv, i++, x0, y0, z0, 0.0f, 1.0f, 0.0f, c0);
-    PushVert(v, n, col, uv, i++, x0, y0 - drop, z0, 0.0f, 1.0f, 0.0f, c0);
-    PushVert(v, n, col, uv, i++, x1, y1 - drop, z1, 0.0f, 1.0f, 0.0f, c1);
-    PushVert(v, n, col, uv, i++, x0, y0, z0, 0.0f, 1.0f, 0.0f, c0);
-    PushVert(v, n, col, uv, i++, x1, y1 - drop, z1, 0.0f, 1.0f, 0.0f, c1);
-    PushVert(v, n, col, uv, i++, x1, y1, z1, 0.0f, 1.0f, 0.0f, c1);
+    PushVert(v, n, col, uv, i++, x0, y0, z0, nx, ny, nz, c0);
+    PushVert(v, n, col, uv, i++, x0, y0 - drop, z0, nx, ny, nz, c0);
+    PushVert(v, n, col, uv, i++, x1, y1 - drop, z1, nx, ny, nz, c1);
+    PushVert(v, n, col, uv, i++, x0, y0, z0, nx, ny, nz, c0);
+    PushVert(v, n, col, uv, i++, x1, y1 - drop, z1, nx, ny, nz, c1);
+    PushVert(v, n, col, uv, i++, x1, y1, z1, nx, ny, nz, c1);
     *gi = i;
 }
 
@@ -715,11 +730,6 @@ int Clip_Build(const ClipJob* job, Mesh* out)
                 Color c = col[jj * stride + ii];
                 if (job->morph) {
                     float a = MorphAlpha(wx, wz, job->viewX, job->viewZ, job->radius, job->level);
-                    /* The shared edge is exactly the coarser surface, not
-                     * almost. A partial blend there opens a crack. */
-                    float edge = s * 1.5f;
-                    if (wx - x0 < edge || x1 - wx < edge || wz - z0 < edge || z1 - wz < edge)
-                        a = 1.0f;
                     if (a > 0.0f) {
                         float hy;
                         float cnx, cny, cnz;
@@ -753,12 +763,14 @@ int Clip_Build(const ClipJob* job, Mesh* out)
                     gi++;
                 }
             }
-            /* A short skirt under the outer edge. A one-pixel crack then
-             * shows ground, not the beige sky, and it cannot flicker. */
-            if (i == 0) Skirt(gv, gn, gc, gu, &gi, px[0], py[0], pz[0], px[3], py[3], pz[3], pc[0], pc[3]);
-            if (i + 1 == n) Skirt(gv, gn, gc, gu, &gi, px[1], py[1], pz[1], px[2], py[2], pz[2], pc[1], pc[2]);
-            if (j == 0) Skirt(gv, gn, gc, gu, &gi, px[0], py[0], pz[0], px[1], py[1], pz[1], pc[0], pc[1]);
-            if (j + 1 == m) Skirt(gv, gn, gc, gu, &gi, px[3], py[3], pz[3], px[2], py[2], pz[2], pc[3], pc[2]);
+            if (job->morph && i == 0)
+                Skirt(gv, gn, gc, gu, &gi, px[0], py[0], pz[0], px[3], py[3], pz[3], pnx[0], pny[0], pnz[0], pc[0], pc[3]);
+            if (job->morph && i + 1 == n)
+                Skirt(gv, gn, gc, gu, &gi, px[1], py[1], pz[1], px[2], py[2], pz[2], pnx[1], pny[1], pnz[1], pc[1], pc[2]);
+            if (job->morph && j == 0)
+                Skirt(gv, gn, gc, gu, &gi, px[0], py[0], pz[0], px[1], py[1], pz[1], pnx[0], pny[0], pnz[0], pc[0], pc[1]);
+            if (job->morph && j + 1 == m)
+                Skirt(gv, gn, gc, gu, &gi, px[3], py[3], pz[3], px[2], py[2], pz[2], pnx[3], pny[3], pnz[3], pc[3], pc[2]);
         }
     }
     MemFree(h);
