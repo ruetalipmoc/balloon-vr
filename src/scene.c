@@ -14,13 +14,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef GL_POLYGON_OFFSET_FILL
-#define GL_POLYGON_OFFSET_FILL 0x8037
-#endif
-extern void glEnable(unsigned int cap);
-extern void glDisable(unsigned int cap);
-extern void glPolygonOffset(float factor, float units);
-
 /* 24 chunks * 64 m = TERRAIN_VIEW_MAX. Kept an integer so the slot array
  * is a real compile-time size, not a variable-length array. */
 #define CHUNK_RADIUS_MAX 24
@@ -63,6 +56,7 @@ struct Scene {
     int locEye;
     int locView;
     int locWater;
+    int locSheet;
     int meshesReady;
 
     Slot slots[MAX_CHUNKS];
@@ -392,9 +386,14 @@ Scene* Scene_Create(void)
     s->locEye = GetShaderLocation(s->groundMat.shader, "uEye");
     s->locView = GetShaderLocation(s->groundMat.shader, "uView");
     s->locWater = GetShaderLocation(s->groundMat.shader, "uWater");
+    s->locSheet = GetShaderLocation(s->groundMat.shader, "uSheet");
     if (s->locWater >= 0) {
         float water = TERRAIN_WATER;
         SetShaderValue(s->groundMat.shader, s->locWater, &water, SHADER_UNIFORM_FLOAT);
+    }
+    if (s->locSheet >= 0) {
+        float sheet = 0.0f;
+        SetShaderValue(s->groundMat.shader, s->locSheet, &sheet, SHADER_UNIFORM_FLOAT);
     }
     s->meshesReady = 1;
 
@@ -1242,6 +1241,42 @@ static void DrawParticles(const Scene* s)
     }
 }
 
+/* One flat sheet for every lake and river. The ground shader drops the
+ * fragments under the waterline, so the shore is the pixel where the
+ * terrain crosses the plane, not a second clipped mesh. */
+static void DrawWaterSheet(const Scene* s)
+{
+    float reach = s->farOuter + 512.0f;
+    if (reach < 8000.0f) reach = 8000.0f;
+    float x = s->balloon.x;
+    float z = s->balloon.z;
+    float y = TERRAIN_WATER;
+    if (s->locSheet >= 0) {
+        float sheet = 1.0f;
+        SetShaderValue(s->groundMat.shader, s->locSheet, &sheet, SHADER_UNIFORM_FLOAT);
+    }
+    BeginShaderMode(s->groundMat.shader);
+    rlDisableBackfaceCulling();
+    rlBegin(RL_QUADS);
+    rlColor4ub(255, 255, 255, 255);
+    rlNormal3f(0.0f, 1.0f, 0.0f);
+    rlTexCoord2f(0.0f, 0.0f);
+    rlVertex3f(x - reach, y, z - reach);
+    rlTexCoord2f(1.0f, 0.0f);
+    rlVertex3f(x - reach, y, z + reach);
+    rlTexCoord2f(1.0f, 1.0f);
+    rlVertex3f(x + reach, y, z + reach);
+    rlTexCoord2f(0.0f, 1.0f);
+    rlVertex3f(x + reach, y, z - reach);
+    rlEnd();
+    rlEnableBackfaceCulling();
+    EndShaderMode();
+    if (s->locSheet >= 0) {
+        float sheet = 0.0f;
+        SetShaderValue(s->groundMat.shader, s->locSheet, &sheet, SHADER_UNIFORM_FLOAT);
+    }
+}
+
 void Scene_Draw(Scene* s, Vector3 eye)
 {
     UpdateChunks(s);
@@ -1274,17 +1309,7 @@ void Scene_Draw(Scene* s, Vector3 eye)
         if (!s->slots[i].occupied || !s->slots[i].mesh.ready) continue;
         DrawMesh(s->slots[i].mesh.ground, s->groundMat, MatrixIdentity());
     }
-    BeginBlendMode(BLEND_ALPHA);
-    rlDrawRenderBatchActive();
-    glEnable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(-1.5f, -2.0f);
-    for (int i = 0; i < MAX_CHUNKS; i++) {
-        if (!s->slots[i].occupied || !s->slots[i].mesh.hasWater) continue;
-        DrawMesh(s->slots[i].mesh.water, s->material, MatrixIdentity());
-    }
-    rlDrawRenderBatchActive();
-    glDisable(GL_POLYGON_OFFSET_FILL);
-    EndBlendMode();
+    DrawWaterSheet(s);
     for (int i = 0; i < MAX_CHUNKS; i++) {
         if (!s->slots[i].occupied) continue;
         for (int p = 0; p < s->slots[i].mesh.propCount; p++) DrawProp(&s->slots[i].mesh.props[p]);

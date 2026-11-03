@@ -28,8 +28,6 @@ static Color LerpColor(Color a, Color b, float t)
     return c;
 }
 
-static Color ApplyHaze(Color c, float fog);
-
 /* Packed into the vertex colour for the ground shader: r city, g farm,
  * b forest, a highland. The pixel shader paints the actual pattern. */
 static Color CoverColor(float x, float z)
@@ -42,44 +40,6 @@ static Color CoverColor(float x, float z)
     c.b = (unsigned char)(Clampf(forest, 0.0f, 1.0f) * 255.0f + 0.5f);
     c.a = (unsigned char)(Clampf(highland, 0.0f, 1.0f) * 255.0f + 0.5f);
     return c;
-}
-
-/* Aerial perspective. Colour drains toward a hazy blue, then the last of it
- * meets the sky horizon so the far edge of the world does not draw a line. */
-static Color ApplyHaze(Color c, float fog)
-{
-    if (fog <= 0.0f) return c;
-    Color haze = { 150, 188, 214, 255 };
-    Color horizon = { 232, 210, 180, 255 };
-    Color washed = LerpColor(c, haze, fog);
-    float intoSky = (fog - 0.75f) / 0.25f;
-    if (intoSky <= 0.0f) return washed;
-    if (intoSky > 1.0f) intoSky = 1.0f;
-    return LerpColor(washed, horizon, intoSky);
-}
-
-static float FogAmount(float dist)
-{
-    /* `--view` is where the colour has mostly washed out. The coarse ground
-     * beyond it keeps a little shading, then meets the sky so the disc has
-     * no rim. The last LOD step (default 520 m) is not this distance. */
-    float view = Terrain_ViewDistance();
-    if (view < TERRAIN_CHUNK_SIZE) view = TERRAIN_CHUNK_SIZE;
-    float start = view * 0.22f;
-    float span = view - start;
-    if (span < 1.0f) span = 1.0f;
-    const float farEnd = 11000.0f;
-    if (dist <= view) {
-        float u = (dist - start) / span;
-        if (u <= 0.0f) return 0.0f;
-        if (u >= 1.0f) u = 1.0f;
-        float s = u * u * (3.0f - 2.0f * u);
-        return s * 0.72f;
-    }
-    float u = (dist - view) / (farEnd - view);
-    if (u >= 1.0f) return 1.0f;
-    float s = u * u * (3.0f - 2.0f * u);
-    return 0.72f + 0.28f * s;
 }
 
 static void VertexShade(float x, float y, float z, float viewX, float viewZ, float step,
@@ -261,80 +221,6 @@ static void AddProps(int cx, int cz, float x0, float z0, float size, int lod,
     }
 }
 
-/* Vertical ribbon under a border edge, drawn both ways. It sits under the
- * shared line, so it only shows through a hairline crack. */
-static void AddSkirt(float* v, float* n, unsigned char* col, float* uv, int* i,
-                     float x0, float y0, float z0, float x1, float y1, float z1,
-                     float nx0, float ny0, float nz0, float nx1, float ny1, float nz1,
-                     Color c0, Color c1)
-{
-    const float drop = 1.6f;
-    float y0b = y0 - drop;
-    float y1b = y1 - drop;
-    float xs[4] = { x0, x1, x1, x0 };
-    float ys[4] = { y0, y1, y1b, y0b };
-    float zs[4] = { z0, z1, z1, z0 };
-    float nxs[4] = { nx0, nx1, nx1, nx0 };
-    float nys[4] = { ny0, ny1, ny1, ny0 };
-    float nzs[4] = { nz0, nz1, nz1, nz0 };
-    Color cs[4] = { c0, c1, c1, c0 };
-    int tris[4][3] = { { 0, 1, 2 }, { 0, 2, 3 }, { 0, 2, 1 }, { 0, 3, 2 } };
-    for (int t = 0; t < 4; t++) {
-        for (int k = 0; k < 3; k++) {
-            int id = tris[t][k];
-            PushVert(v, n, col, uv, *i, xs[id], ys[id], zs[id], nxs[id], nys[id], nzs[id], cs[id]);
-            (*i)++;
-        }
-    }
-}
-
-typedef struct WetPt {
-    float x, y, z;
-} WetPt;
-
-/* Keep the part of the polygon that is at or under the waterline. */
-static int ClipWet(const WetPt* in, int n, WetPt* out)
-{
-    int m = 0;
-    for (int i = 0; i < n; i++) {
-        WetPt a = in[i];
-        WetPt b = in[(i + 1) % n];
-        int aIn = a.y <= TERRAIN_WATER;
-        int bIn = b.y <= TERRAIN_WATER;
-        if (aIn != bIn) {
-            float dy = b.y - a.y;
-            float t = (fabsf(dy) < 1.0e-5f) ? 0.0f : (TERRAIN_WATER - a.y) / dy;
-            if (t < 0.0f) t = 0.0f;
-            if (t > 1.0f) t = 1.0f;
-            if (m < 8) {
-                out[m].x = a.x + (b.x - a.x) * t;
-                out[m].y = TERRAIN_WATER;
-                out[m].z = a.z + (b.z - a.z) * t;
-                m++;
-            }
-        }
-        if (bIn && m < 8) {
-            out[m] = b;
-            m++;
-        }
-    }
-    return m;
-}
-
-static void SkirtEdge(float* v, float* n, unsigned char* col, float* uv, int* i,
-                      int jx0, int jz0, int jx1, int jz1, int grid,
-                      float x0, float z0, float size, int cx, int cz,
-                      float viewX, float viewZ)
-{
-    TerrainSample a = Terrain_Sample(jx0, jz0, grid, x0, z0, size, cx, cz, viewX, viewZ);
-    TerrainSample b = Terrain_Sample(jx1, jz1, grid, x0, z0, size, cx, cz, viewX, viewZ);
-    float nax, nay, naz, nbx, nby, nbz;
-    Color ca, cb;
-    SampleShade(&a, viewX, viewZ, size / (float)grid, &nax, &nay, &naz, &ca);
-    SampleShade(&b, viewX, viewZ, size / (float)grid, &nbx, &nby, &nbz, &cb);
-    AddSkirt(v, n, col, uv, i, a.x, a.y, a.z, b.x, b.y, b.z, nax, nay, naz, nbx, nby, nbz, ca, cb);
-}
-
 int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh* out)
 {
     memset(out, 0, sizeof(*out));
@@ -344,23 +230,11 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
     float z0 = (float)cz * size;
 
     int quads = grid * grid;
-    int groundVerts = quads * 6 + grid * 4 * 12;
+    int groundVerts = quads * 6;
     float* gv = (float*)MemAlloc((unsigned int)groundVerts * 3 * sizeof(float));
     float* gn = (float*)MemAlloc((unsigned int)groundVerts * 3 * sizeof(float));
     unsigned char* gc = (unsigned char*)MemAlloc((unsigned int)groundVerts * 4);
     float* gu = (float*)MemAlloc((unsigned int)groundVerts * 2 * sizeof(float));
-
-    int waterQuads = 0;
-    for (int jz = 0; jz < grid; jz++) {
-        for (int jx = 0; jx < grid; jx++) {
-            TerrainSample s00 = Terrain_Sample(jx, jz, grid, x0, z0, size, cx, cz, viewX, viewZ);
-            TerrainSample s10 = Terrain_Sample(jx + 1, jz, grid, x0, z0, size, cx, cz, viewX, viewZ);
-            TerrainSample s11 = Terrain_Sample(jx + 1, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ);
-            TerrainSample s01 = Terrain_Sample(jx, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ);
-            if (s00.y < TERRAIN_WATER || s10.y < TERRAIN_WATER || s11.y < TERRAIN_WATER || s01.y < TERRAIN_WATER)
-                waterQuads++;
-        }
-    }
 
     int gi = 0;
     for (int jz = 0; jz < grid; jz++) {
@@ -389,70 +263,7 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
             }
         }
     }
-    for (int e = 0; e < grid; e++) {
-        SkirtEdge(gv, gn, gc, gu, &gi, e, 0, e + 1, 0, grid, x0, z0, size, cx, cz, viewX, viewZ);
-        SkirtEdge(gv, gn, gc, gu, &gi, e, grid, e + 1, grid, grid, x0, z0, size, cx, cz, viewX, viewZ);
-        SkirtEdge(gv, gn, gc, gu, &gi, 0, e, 0, e + 1, grid, x0, z0, size, cx, cz, viewX, viewZ);
-        SkirtEdge(gv, gn, gc, gu, &gi, grid, e, grid, e + 1, grid, x0, z0, size, cx, cz, viewX, viewZ);
-    }
     UploadFlat(&out->ground, gi, gv, gn, gc, gu);
-
-    if (waterQuads > 0) {
-        /* A clipped shore can turn one triangle into two, so allow 12 verts. */
-        int wvCount = waterQuads * 12;
-        float* wv = (float*)MemAlloc((unsigned int)wvCount * 3 * sizeof(float));
-        float* wn = (float*)MemAlloc((unsigned int)wvCount * 3 * sizeof(float));
-        unsigned char* wc = (unsigned char*)MemAlloc((unsigned int)wvCount * 4);
-        float* wu = (float*)MemAlloc((unsigned int)wvCount * 2 * sizeof(float));
-        int wi = 0;
-        for (int jz = 0; jz < grid; jz++) {
-            for (int jx = 0; jx < grid; jx++) {
-                TerrainSample corner[4] = {
-                    Terrain_Sample(jx, jz, grid, x0, z0, size, cx, cz, viewX, viewZ),
-                    Terrain_Sample(jx + 1, jz, grid, x0, z0, size, cx, cz, viewX, viewZ),
-                    Terrain_Sample(jx + 1, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ),
-                    Terrain_Sample(jx, jz + 1, grid, x0, z0, size, cx, cz, viewX, viewZ)
-                };
-                if (!(corner[0].y < TERRAIN_WATER || corner[1].y < TERRAIN_WATER ||
-                      corner[2].y < TERRAIN_WATER || corner[3].y < TERRAIN_WATER))
-                    continue;
-                int tris[2][3] = { { 0, 2, 1 }, { 0, 3, 2 } };
-                for (int t = 0; t < 2; t++) {
-                    WetPt poly[3];
-                    for (int k = 0; k < 3; k++) {
-                        int id = tris[t][k];
-                        poly[k].x = corner[id].x;
-                        poly[k].y = corner[id].y;
-                        poly[k].z = corner[id].z;
-                    }
-                    WetPt wet[8];
-                    int m = ClipWet(poly, 3, wet);
-                    if (m < 3) continue;
-                    for (int k = 1; k < m - 1; k++) {
-                        WetPt fan[3] = { wet[0], wet[k], wet[k + 1] };
-                        for (int v = 0; v < 3; v++) {
-                            float fog = FogAmount(hypotf(fan[v].x - viewX, fan[v].z - viewZ));
-                            Color water = { 64, 150, 196, 255 };
-                            water = ApplyHaze(water, fog);
-                            water.a = 210;
-                            PushVert(wv, wn, wc, wu, wi, fan[v].x, TERRAIN_WATER, fan[v].z,
-                                     0, 1, 0, water);
-                            wi++;
-                        }
-                    }
-                }
-            }
-        }
-        if (wi >= 3) {
-            UploadFlat(&out->water, wi, wv, wn, wc, wu);
-            out->hasWater = 1;
-        } else {
-            MemFree(wv);
-            MemFree(wn);
-            MemFree(wc);
-            MemFree(wu);
-        }
-    }
 
     if (lod <= 2) AddProps(cx, cz, x0, z0, size, lod, viewX, viewZ, out);
     out->ready = 1;
@@ -463,7 +274,6 @@ void ChunkMesh_Free(ChunkMesh* chunk)
 {
     if (!chunk->ready) return;
     UnloadMesh(chunk->ground);
-    if (chunk->hasWater) UnloadMesh(chunk->water);
     memset(chunk, 0, sizeof(*chunk));
 }
 

@@ -45,6 +45,7 @@ static const char GROUND_VS_100[] =
     "uniform vec2 uEye;\n" \
     "uniform float uView;\n" \
     "uniform float uWater;\n" \
+    "uniform float uSheet;\n" \
     "const float FIELD = 128.0;\n" \
     "const float BLOCK = 64.0;\n" \
     "float sat(float x) { return clamp(x, 0.0, 1.0); }\n" \
@@ -86,6 +87,11 @@ static const char GROUND_VS_100[] =
     "    return mix(washed, horizon, intoSky);\n" \
     "}\n" \
     "vec3 landColor(vec3 world, vec3 nrm, vec4 cover) {\n" \
+    "    if (uSheet > 0.5) {\n" \
+    "        vec3 water = vec3(64.0, 150.0, 196.0) / 255.0;\n" \
+    "        return applyHaze(water, fogAmount(length(world.xz - uEye)));\n" \
+    "    }\n" \
+    "    if (world.y < uWater) discard;\n" \
     "    float city = sat(cover.r);\n" \
     "    float farm = sat(cover.g);\n" \
     "    float forest = sat(cover.b);\n" \
@@ -113,13 +119,15 @@ static const char GROUND_VS_100[] =
     "    cityC = mix(grass, cityC, smoothstep(uWater + 0.2, uWater + 1.2, world.y));\n" \
     "    float sum = max(plains + farm + forest + highland + city, 0.0001);\n" \
     "    vec3 c = (grass * plains + field * farm + canopy * forest + highC * highland + cityC * city) / sum;\n" \
-    "    float shore = (1.0 - sat(farm + city)) * step(uWater, world.y) * (1.0 - step(uWater + 2.4, world.y));\n" \
+    "    float above = world.y - uWater;\n" \
+    "    float shore = (1.0 - sat(farm + city)) * step(0.0, above) * (1.0 - smoothstep(3.2, 4.8, above));\n" \
     "    vec3 sand = vec3(214.0, 196.0, 138.0) / 255.0;\n" \
-    "    c = mix(c, mix(sand, c, sat((world.y - uWater) / 2.4)), shore);\n" \
+    "    c = mix(c, mix(sand, c, smoothstep(0.0, 4.0, above)), shore);\n" \
+    "    float foam = (1.0 - sat(farm + city)) * step(0.0, above) * (1.0 - smoothstep(0.0, 1.4, above));\n" \
+    "    c = mix(c, vec3(232.0, 236.0, 226.0) / 255.0, foam * 0.7);\n" \
     "    float rockT = sat((0.88 - nrm.y) / 0.30) * highland + sat((0.70 - nrm.y) / 0.28) * (1.0 - sat(farm + city)) * (1.0 - highland);\n" \
     "    c = mix(c, vec3(142.0, 138.0, 128.0) / 255.0, sat(rockT));\n" \
     "    c = mix(c, vec3(236.0, 242.0, 246.0) / 255.0, sat((world.y - 52.0) / 18.0));\n" \
-    "    if (world.y < uWater) c = vec3(46.0, 110.0, 150.0) / 255.0;\n" \
     "    return applyHaze(c, fogAmount(length(world.xz - uEye)));\n" \
     "}\n"
 

@@ -1,6 +1,5 @@
-/* Chunk meshes with distance LOD. Shared edges use the same heights, and a
- * short skirt under each border hides the hairline a T-junction can leave.
- * The farthest ring drops its colour into a blue haze. */
+/* Chunk meshes with distance LOD. Shared edges use the same heights.
+ * Colour, the shoreline and the haze live in the ground shader. */
 #ifndef BALLOON_TERRAIN_MESH_H
 #define BALLOON_TERRAIN_MESH_H
 
@@ -17,8 +16,6 @@ typedef struct Prop {
 
 typedef struct ChunkMesh {
     Mesh ground;
-    Mesh water;
-    int hasWater;
     int ready;
     Prop props[CHUNK_MAX_PROPS];
     int propCount;
