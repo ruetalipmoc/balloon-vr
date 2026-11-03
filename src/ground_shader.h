@@ -86,12 +86,17 @@ static const char GROUND_VS_100[] =
     "    float intoSky = sat((fog - 0.75) / 0.25);\n" \
     "    return mix(washed, horizon, intoSky);\n" \
     "}\n" \
+    "float shoreAlpha;\n" \
     "vec3 landColor(vec3 world, vec3 nrm, vec4 cover) {\n" \
+    "    shoreAlpha = 1.0;\n" \
     "    if (uSheet > 0.5) {\n" \
     "        vec3 water = vec3(64.0, 150.0, 196.0) / 255.0;\n" \
     "        return applyHaze(water, fogAmount(length(world.xz - uEye)));\n" \
     "    }\n" \
-    "    if (world.y < uWater) discard;\n" \
+    "    float above = world.y - uWater;\n" \
+    "    float aa = max(fwidth(world.y), 0.001);\n" \
+    "    shoreAlpha = smoothstep(-aa, aa, above);\n" \
+    "    if (shoreAlpha < 0.02) discard;\n" \
     "    float city = sat(cover.r);\n" \
     "    float farm = sat(cover.g);\n" \
     "    float forest = sat(cover.b);\n" \
@@ -119,11 +124,11 @@ static const char GROUND_VS_100[] =
     "    cityC = mix(grass, cityC, smoothstep(uWater + 0.2, uWater + 1.2, world.y));\n" \
     "    float sum = max(plains + farm + forest + highland + city, 0.0001);\n" \
     "    vec3 c = (grass * plains + field * farm + canopy * forest + highC * highland + cityC * city) / sum;\n" \
-    "    float above = world.y - uWater;\n" \
-    "    float shore = (1.0 - sat(farm + city)) * step(0.0, above) * (1.0 - smoothstep(3.2, 4.8, above));\n" \
+    "    float bank = smoothstep(-aa, aa, above);\n" \
+    "    float shore = (1.0 - sat(farm + city)) * bank * (1.0 - smoothstep(3.2, 4.8, max(above, 0.0)));\n" \
     "    vec3 sand = vec3(214.0, 196.0, 138.0) / 255.0;\n" \
-    "    c = mix(c, mix(sand, c, smoothstep(0.0, 4.0, above)), shore);\n" \
-    "    float foam = (1.0 - sat(farm + city)) * step(0.0, above) * (1.0 - smoothstep(0.0, 1.4, above));\n" \
+    "    c = mix(c, mix(sand, c, smoothstep(0.0, 4.0, max(above, 0.0))), shore);\n" \
+    "    float foam = (1.0 - sat(farm + city)) * bank * (1.0 - smoothstep(0.0, 1.4, max(above, 0.0)));\n" \
     "    c = mix(c, vec3(232.0, 236.0, 226.0) / 255.0, foam * 0.7);\n" \
     "    float rockT = sat((0.88 - nrm.y) / 0.30) * highland + sat((0.70 - nrm.y) / 0.28) * (1.0 - sat(farm + city)) * (1.0 - highland);\n" \
     "    c = mix(c, vec3(142.0, 138.0, 128.0) / 255.0, sat(rockT));\n" \
@@ -141,11 +146,12 @@ static const char GROUND_FS_330[] =
     "void main() {\n"
     "    vec3 nrm = normalize(vNormal);\n"
     "    vec3 c = landColor(vWorld, nrm, vCover);\n"
-    "    finalColor = vec4(c, 1.0) * colDiffuse;\n"
+    "    finalColor = vec4(c, shoreAlpha) * colDiffuse;\n"
     "}\n";
 
 static const char GROUND_FS_100[] =
     "#version 100\n"
+    "#extension GL_OES_standard_derivatives : enable\n"
     "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
     "precision highp float;\n"
     "#else\n"
@@ -158,7 +164,7 @@ static const char GROUND_FS_100[] =
     "void main() {\n"
     "    vec3 nrm = normalize(vNormal);\n"
     "    vec3 c = landColor(vWorld, nrm, vCover);\n"
-    "    gl_FragColor = vec4(c, 1.0) * colDiffuse;\n"
+    "    gl_FragColor = vec4(c, shoreAlpha) * colDiffuse;\n"
     "}\n";
 
 #endif

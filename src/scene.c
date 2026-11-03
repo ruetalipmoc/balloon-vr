@@ -14,6 +14,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef GL_POLYGON_OFFSET_FILL
+#define GL_POLYGON_OFFSET_FILL 0x8037
+#endif
+extern void glEnable(unsigned int cap);
+extern void glDisable(unsigned int cap);
+extern void glPolygonOffset(float factor, float units);
+
 /* 24 chunks * 64 m = TERRAIN_VIEW_MAX. Kept an integer so the slot array
  * is a real compile-time size, not a variable-length array. */
 #define CHUNK_RADIUS_MAX 24
@@ -1241,20 +1248,23 @@ static void DrawParticles(const Scene* s)
     }
 }
 
-/* One flat sheet for every lake and river. The ground shader drops the
- * fragments under the waterline, so the shore is the pixel where the
- * terrain crosses the plane, not a second clipped mesh. */
+/* Backdrop for every lake and river. It sits a little below the waterline
+ * and is pushed back in the depth buffer, so it never ties the bank. The
+ * shore itself is a one-pixel fade in the ground shader. */
 static void DrawWaterSheet(const Scene* s)
 {
     float reach = s->farOuter + 512.0f;
     if (reach < 8000.0f) reach = 8000.0f;
     float x = s->balloon.x;
     float z = s->balloon.z;
-    float y = TERRAIN_WATER;
+    float y = TERRAIN_WATER - 0.35f;
     if (s->locSheet >= 0) {
         float sheet = 1.0f;
         SetShaderValue(s->groundMat.shader, s->locSheet, &sheet, SHADER_UNIFORM_FLOAT);
     }
+    rlDrawRenderBatchActive();
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(2.0f, 4.0f);
     BeginShaderMode(s->groundMat.shader);
     rlDisableBackfaceCulling();
     rlBegin(RL_QUADS);
@@ -1271,6 +1281,8 @@ static void DrawWaterSheet(const Scene* s)
     rlEnd();
     rlEnableBackfaceCulling();
     EndShaderMode();
+    rlDrawRenderBatchActive();
+    glDisable(GL_POLYGON_OFFSET_FILL);
     if (s->locSheet >= 0) {
         float sheet = 0.0f;
         SetShaderValue(s->groundMat.shader, s->locSheet, &sheet, SHADER_UNIFORM_FLOAT);
@@ -1304,12 +1316,14 @@ void Scene_Draw(Scene* s, Vector3 eye)
         float view = Terrain_ViewDistance();
         SetShaderValue(s->groundMat.shader, s->locView, &view, SHADER_UNIFORM_FLOAT);
     }
+    DrawWaterSheet(s);
+    BeginBlendMode(BLEND_ALPHA);
     if (s->farReady) DrawMesh(s->farField, s->groundMat, MatrixIdentity());
     for (int i = 0; i < MAX_CHUNKS; i++) {
         if (!s->slots[i].occupied || !s->slots[i].mesh.ready) continue;
         DrawMesh(s->slots[i].mesh.ground, s->groundMat, MatrixIdentity());
     }
-    DrawWaterSheet(s);
+    EndBlendMode();
     for (int i = 0; i < MAX_CHUNKS; i++) {
         if (!s->slots[i].occupied) continue;
         for (int p = 0; p < s->slots[i].mesh.propCount; p++) DrawProp(&s->slots[i].mesh.props[p]);
