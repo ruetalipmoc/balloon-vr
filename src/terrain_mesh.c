@@ -562,24 +562,6 @@ static Color CSample(const Color* c, int stride, int n, int m, int i, int j)
     return c[j * stride + i];
 }
 
-/* Same slope as the coarser ring, sampled past the edge so the border is
- * not flatter than the ground it meets. */
-static void CoarseNormal(float wx, float wz, float step, float* nx, float* ny, float* nz)
-{
-    float e = 2.0f * step;
-    float hl = Terrain_Height(wx - e, wz);
-    float hr = Terrain_Height(wx + e, wz);
-    float hd = Terrain_Height(wx, wz - e);
-    float hu = Terrain_Height(wx, wz + e);
-    float span = 4.0f * step;
-    float dhx = (hl - hr) / span;
-    float dhz = (hd - hu) / span;
-    float len = sqrtf(dhx * dhx + 1.0f + dhz * dhz);
-    *nx = dhx / len;
-    *ny = 1.0f / len;
-    *nz = dhz / len;
-}
-
 /* Height, cover and normal of the coarser triangle under this vertex.
  * The fine vertex flattens onto that plane, so the two rings are the same
  * surface where they meet. */
@@ -625,21 +607,27 @@ static void CoarseSurface(const float* h, const Color* col, int stride, int n, i
     c->b = (unsigned char)(w0 * k0.b + w1 * k1.b + w2 * k2.b + 0.5f);
     c->a = (unsigned char)(w0 * k0.a + w1 * k1.a + w2 * k2.a + 0.5f);
 
+    /* The normal is the coarse triangle itself. Sampling the height field
+     * again here used to rebuild drainage tiles off to the side of the ring. */
     int i0, j0, i1, j1, i2, j2;
     if (tx >= tz) {
         i0 = ci; j0 = cj; i1 = ci + 2; j1 = cj + 2; i2 = ci + 2; j2 = cj;
     } else {
         i0 = ci; j0 = cj; i1 = ci; j1 = cj + 2; i2 = ci + 2; j2 = cj + 2;
     }
-    float n0x, n0y, n0z, n1x, n1y, n1z, n2x, n2y, n2z;
-    CoarseNormal(x0 + (float)i0 * s, z0 + (float)j0 * s, s, &n0x, &n0y, &n0z);
-    CoarseNormal(x0 + (float)i1 * s, z0 + (float)j1 * s, s, &n1x, &n1y, &n1z);
-    CoarseNormal(x0 + (float)i2 * s, z0 + (float)j2 * s, s, &n2x, &n2y, &n2z);
-    float nxw = n0x * w0 + n1x * w1 + n2x * w2;
-    float nyw = n0y * w0 + n1y * w1 + n2y * w2;
-    float nzw = n0z * w0 + n1z * w1 + n2z * w2;
+    float ax = x0 + (float)i0 * s;
+    float az = z0 + (float)j0 * s;
+    float bx = x0 + (float)i1 * s;
+    float bz = z0 + (float)j1 * s;
+    float cxp = x0 + (float)i2 * s;
+    float czp = z0 + (float)j2 * s;
+    float e1x = bx - ax, e1y = y1 - y0, e1z = bz - az;
+    float e2x = cxp - ax, e2y = y2 - y0, e2z = czp - az;
+    float nxw = e1y * e2z - e1z * e2y;
+    float nyw = e1z * e2x - e1x * e2z;
+    float nzw = e1x * e2y - e1y * e2x;
     float len = sqrtf(nxw * nxw + nyw * nyw + nzw * nzw);
-    if (len < 1.0e-5f) {
+    if (len < 1.0e-5f || nyw < 0.0f) {
         *nx = 0.0f; *ny = 1.0f; *nz = 0.0f;
     } else {
         *nx = nxw / len; *ny = nyw / len; *nz = nzw / len;

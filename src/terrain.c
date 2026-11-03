@@ -118,7 +118,7 @@ static int DivFloor(int a, int b)
     return q;
 }
 
-static float BaseRelief(int ix, int iz)
+static float BaseReliefRaw(int ix, int iz)
 {
     float x = (float)ix * DRAIN_CELL;
     float z = (float)iz * DRAIN_CELL;
@@ -127,6 +127,33 @@ static float BaseRelief(int ix, int iz)
     float ridgeN = Fbm(x + 520.0f, z - 280.0f, 0.0024f, 1.0f, 2);
     float ridge = 1.0f - fabsf(ridgeN * 2.0f - 1.0f);
     return 9.0f + macro * 38.0f + (detail - 0.5f) * 12.0f + ridge * ridge * 16.0f;
+}
+
+/* Neighbouring tiles share most of this grid. Remember it so the overlap
+ * is not evaluated again. */
+#define BASE_CACHE 65536
+static int g_baseX[BASE_CACHE];
+static int g_baseZ[BASE_CACHE];
+static float g_baseH[BASE_CACHE];
+static unsigned char g_baseLive[BASE_CACHE];
+
+static float BaseRelief(int ix, int iz)
+{
+    unsigned int h = (unsigned int)ix * 374761393u ^ (unsigned int)iz * 668265263u;
+    int slot = (int)(h % BASE_CACHE);
+    for (int n = 0; n < 24; n++) {
+        int i = (slot + n) % BASE_CACHE;
+        if (!g_baseLive[i]) {
+            float y = BaseReliefRaw(ix, iz);
+            g_baseLive[i] = 1;
+            g_baseX[i] = ix;
+            g_baseZ[i] = iz;
+            g_baseH[i] = y;
+            return y;
+        }
+        if (g_baseX[i] == ix && g_baseZ[i] == iz) return g_baseH[i];
+    }
+    return BaseReliefRaw(ix, iz);
 }
 
 static void GenerateTile(DrainTile* tile, int tx, int tz)
@@ -301,18 +328,21 @@ static Land LandAt(float x, float z)
 
 float Terrain_Height(float x, float z)
 {
-    return LandAt(x, z).height;
+    float h = 0.0f, wet = 0.0f;
+    SampleDrain(x, z, &h, &wet);
+    return h;
 }
 
 int Terrain_Zone(float x, float z)
 {
-    Land land = LandAt(x, z);
+    float city, farm, forest, highland;
+    MasksAt(x, z, &city, &farm, &forest, &highland);
     float best = 0.0f;
     int zone = TERRAIN_ZONE_PLAINS;
-    if (land.highland > best) { best = land.highland; zone = TERRAIN_ZONE_HIGHLAND; }
-    if (land.forest > best) { best = land.forest; zone = TERRAIN_ZONE_FOREST; }
-    if (land.farm > best) { best = land.farm; zone = TERRAIN_ZONE_FARM; }
-    if (land.city > best) zone = TERRAIN_ZONE_CITY;
+    if (highland > best) { best = highland; zone = TERRAIN_ZONE_HIGHLAND; }
+    if (forest > best) { best = forest; zone = TERRAIN_ZONE_FOREST; }
+    if (farm > best) { best = farm; zone = TERRAIN_ZONE_FARM; }
+    if (city > best) zone = TERRAIN_ZONE_CITY;
     return zone;
 }
 

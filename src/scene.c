@@ -53,6 +53,8 @@ struct Scene {
     int propCount;
     int propsReady;
     float propX, propZ;
+    Mesh propMesh;
+    int propMeshReady;
     int resetView;
     Material material;
     Material groundMat;
@@ -621,6 +623,7 @@ void Scene_Destroy(Scene* s)
         if (s->clip[i].ready) UnloadMesh(s->clip[i].mesh);
         if (s->clip[i].pendingReady) UnloadMesh(s->clip[i].pending);
     }
+    if (s->propMeshReady) UnloadMesh(s->propMesh);
     if (s->meshesReady) {
         UnloadMesh(s->envelope);
         UnloadMesh(s->crown);
@@ -758,6 +761,8 @@ static int SameJob(const ClipJob* a, const ClipJob* b)
         && a->hasHole == b->hasHole && a->morph == b->morph;
 }
 
+static void RebuildPropMesh(Scene* s);
+
 static void UpdateClip(Scene* s)
 {
     float agl = s->balloon.altitude - s->groundY;
@@ -840,6 +845,7 @@ static void UpdateClip(Scene* s)
         s->propX = px;
         s->propZ = pz;
         s->propsReady = 1;
+        RebuildPropMesh(s);
     }
 }
 
@@ -1366,41 +1372,165 @@ static Color Melt(Color c, float fade)
     return o;
 }
 
-static void DrawProp(const Prop* p)
+typedef struct PropBuf {
+    float* v;
+    float* n;
+    unsigned char* c;
+    float* uv;
+    int count;
+    int cap;
+} PropBuf;
+
+static void PropNeed(PropBuf* b, int extra)
 {
-    Vector3 pos = { p->x, p->y, p->z };
-    float fade = p->fade;
-    float s = p->scale * (0.55f + 0.45f * fade);
-    if (p->kind == 0) {
-        DrawCylinder(pos, 0.08f * s, 0.10f * s, 0.7f * s, 5, Melt((Color){ 92, 64, 40, 255 }, fade));
-        DrawSphere((Vector3){ pos.x, pos.y + 1.05f * s, pos.z }, 0.55f * s, Melt((Color){ 48, 130, 62, 255 }, fade));
-    } else if (p->kind == 1) {
-        DrawCylinder(pos, 0.07f * s, 0.09f * s, 0.55f * s, 5, Melt((Color){ 84, 60, 40, 255 }, fade));
-        DrawCylinder((Vector3){ pos.x, pos.y + 0.45f * s, pos.z }, 0.02f, 0.55f * s, 1.7f * s, 6, Melt((Color){ 30, 90, 58, 255 }, fade));
-    } else if (p->kind == 2) {
-        DrawCube((Vector3){ pos.x, pos.y + 0.25f * s, pos.z }, 0.7f * s, 0.45f * s, 0.55f * s, Melt((Color){ 128, 126, 120, 255 }, fade));
-    } else if (p->kind == 3) {
-        DrawCube((Vector3){ pos.x, pos.y + 0.7f * s, pos.z }, 1.6f * s, 1.3f * s, 1.4f * s, Melt((Color){ 196, 168, 140, 255 }, fade));
-        DrawCylinder((Vector3){ pos.x, pos.y + 1.35f * s, pos.z }, 0.05f * s, 1.15f * s, 0.7f * s, 4, Melt((Color){ 150, 64, 52, 255 }, fade));
-    } else if (p->kind == 4) {
-        DrawCube((Vector3){ pos.x, pos.y + 1.15f * s, pos.z }, 3.6f * s, 2.3f * s, 2.3f * s, Melt((Color){ 176, 84, 62, 255 }, fade));
-        DrawCube((Vector3){ pos.x, pos.y + 2.45f * s, pos.z }, 3.9f * s, 0.38f * s, 2.55f * s, Melt((Color){ 148, 42, 40, 255 }, fade));
-        DrawCylinder((Vector3){ pos.x + 2.35f * s, pos.y, pos.z + 0.2f }, 0.55f * s, 0.55f * s, 2.8f * s, 6, Melt((Color){ 198, 198, 190, 255 }, fade));
-        DrawCylinder((Vector3){ pos.x + 2.35f * s, pos.y + 2.7f * s, pos.z + 0.2f }, 0.05f * s, 0.7f * s, 0.35f * s, 6, Melt((Color){ 150, 150, 146, 255 }, fade));
-    } else {
-        float tall = (p->kind == 6) ? 1.45f : 1.0f;
-        float height = (14.0f + s * 7.0f) * tall;
-        float w = (p->kind == 6) ? 12.0f + s * 2.0f : 22.0f + s * 4.0f;
-        float d = w * 0.72f;
-        Color wall = (p->kind == 6) ? (Color){ 118, 128, 140, 255 } : (Color){ 188, 176, 160, 255 };
-        if (((int)floorf(pos.x + pos.z) & 1) != 0) wall = (Color){ 164, 172, 180, 255 };
-        DrawCube((Vector3){ pos.x, pos.y + height * 0.5f, pos.z }, w, height, d, Melt(wall, fade));
-        DrawCube((Vector3){ pos.x, pos.y + height + 0.12f, pos.z }, w + 0.35f, 0.28f, d + 0.35f, Melt((Color){ 92, 96, 102, 255 }, fade));
-        Color glass = Melt((Color){ 64, 92, 112, 255 }, fade);
-        float band = height * 0.42f;
-        DrawCube((Vector3){ pos.x, pos.y + height * 0.55f, pos.z + d * 0.5f + 0.04f }, w * 0.72f, band, 0.08f, glass);
-        DrawCube((Vector3){ pos.x + w * 0.5f + 0.04f, pos.y + height * 0.55f, pos.z }, 0.08f, band, d * 0.72f, glass);
+    if (b->count + extra <= b->cap) return;
+    int cap = b->cap > 0 ? b->cap : 2048;
+    while (cap < b->count + extra) cap *= 2;
+    b->v = (float*)MemRealloc(b->v, (unsigned int)cap * 3 * sizeof(float));
+    b->n = (float*)MemRealloc(b->n, (unsigned int)cap * 3 * sizeof(float));
+    b->c = (unsigned char*)MemRealloc(b->c, (unsigned int)cap * 4);
+    b->uv = (float*)MemRealloc(b->uv, (unsigned int)cap * 2 * sizeof(float));
+    b->cap = cap;
+}
+
+static void PropVert(PropBuf* b, float x, float y, float z, float nx, float ny, float nz, Color col)
+{
+    PropNeed(b, 1);
+    int i = b->count++;
+    b->v[i * 3] = x;
+    b->v[i * 3 + 1] = y;
+    b->v[i * 3 + 2] = z;
+    b->n[i * 3] = nx;
+    b->n[i * 3 + 1] = ny;
+    b->n[i * 3 + 2] = nz;
+    b->c[i * 4] = col.r;
+    b->c[i * 4 + 1] = col.g;
+    b->c[i * 4 + 2] = col.b;
+    b->c[i * 4 + 3] = col.a;
+    b->uv[i * 2] = 0.0f;
+    b->uv[i * 2 + 1] = 0.0f;
+}
+
+static void PropTri(PropBuf* b,
+                    float x0, float y0, float z0,
+                    float x1, float y1, float z1,
+                    float x2, float y2, float z2,
+                    Color col)
+{
+    float e1x = x1 - x0, e1y = y1 - y0, e1z = z1 - z0;
+    float e2x = x2 - x0, e2y = y2 - y0, e2z = z2 - z0;
+    float nx = e1y * e2z - e1z * e2y;
+    float ny = e1z * e2x - e1x * e2z;
+    float nz = e1x * e2y - e1y * e2x;
+    float len = sqrtf(nx * nx + ny * ny + nz * nz);
+    if (len < 1.0e-6f) len = 1.0f;
+    nx /= len; ny /= len; nz /= len;
+    PropVert(b, x0, y0, z0, nx, ny, nz, col);
+    PropVert(b, x1, y1, z1, nx, ny, nz, col);
+    PropVert(b, x2, y2, z2, nx, ny, nz, col);
+}
+
+static void PropCube(PropBuf* b, float x, float y, float z, float w, float h, float d, Color col)
+{
+    float hx = w * 0.5f, hy = h * 0.5f, hz = d * 0.5f;
+    float x0 = x - hx, x1 = x + hx, y0 = y - hy, y1 = y + hy, z0 = z - hz, z1 = z + hz;
+    PropTri(b, x0, y0, z1, x1, y0, z1, x0, y1, z1, col);
+    PropTri(b, x1, y1, z1, x0, y1, z1, x1, y0, z1, col);
+    PropTri(b, x1, y0, z0, x0, y0, z0, x1, y1, z0, col);
+    PropTri(b, x0, y1, z0, x1, y1, z0, x0, y0, z0, col);
+    PropTri(b, x0, y1, z0, x0, y1, z1, x1, y1, z1, col);
+    PropTri(b, x1, y1, z1, x1, y1, z0, x0, y1, z0, col);
+    PropTri(b, x0, y0, z1, x0, y0, z0, x1, y0, z0, col);
+    PropTri(b, x1, y0, z0, x1, y0, z1, x0, y0, z1, col);
+    PropTri(b, x1, y0, z0, x1, y1, z0, x1, y1, z1, col);
+    PropTri(b, x1, y1, z1, x1, y0, z1, x1, y0, z0, col);
+    PropTri(b, x0, y0, z1, x0, y1, z1, x0, y1, z0, col);
+    PropTri(b, x0, y1, z0, x0, y0, z0, x0, y0, z1, col);
+}
+
+static void PropCyl(PropBuf* b, float x, float y, float z, float r0, float r1, float h, int sides, Color col)
+{
+    if (sides < 3) sides = 3;
+    float step = 2.0f * (float)M_PI / (float)sides;
+    for (int i = 0; i < sides; i++) {
+        float a0 = (float)i * step;
+        float a1 = (float)(i + 1) * step;
+        float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
+        float xb0 = x + s0 * r0, zb0 = z + c0 * r0;
+        float xb1 = x + s1 * r0, zb1 = z + c1 * r0;
+        float xt1 = x + s1 * r1, zt1 = z + c1 * r1;
+        float xt0 = x + s0 * r1, zt0 = z + c0 * r1;
+        float y1 = y + h;
+        PropTri(b, xb0, y, zb0, xb1, y, zb1, xt1, y1, zt1, col);
+        PropTri(b, xt1, y1, zt1, xt0, y1, zt0, xb0, y, zb0, col);
+        if (r1 > 0.0f) PropTri(b, x, y1, z, xt0, y1, zt0, xt1, y1, zt1, col);
+        if (r0 > 0.0f) PropTri(b, x, y, z, xb1, y, zb1, xb0, y, zb0, col);
     }
+}
+
+static void RebuildPropMesh(Scene* s)
+{
+    if (s->propMeshReady) {
+        UnloadMesh(s->propMesh);
+        s->propMeshReady = 0;
+    }
+    if (s->propCount <= 0) return;
+    PropBuf buf;
+    memset(&buf, 0, sizeof(buf));
+    for (int i = 0; i < s->propCount; i++) {
+        const Prop* p = &s->props[i];
+        float fade = p->fade;
+        float sc = p->scale * (0.55f + 0.45f * fade);
+        float x = p->x, y = p->y, z = p->z;
+        if (p->kind == 0) {
+            PropCyl(&buf, x, y, z, 0.10f * sc, 0.08f * sc, 0.7f * sc, 5, Melt((Color){ 92, 64, 40, 255 }, fade));
+            PropCyl(&buf, x, y + 0.55f * sc, z, 0.55f * sc, 0.0f, 0.7f * sc, 5, Melt((Color){ 48, 130, 62, 255 }, fade));
+        } else if (p->kind == 1) {
+            PropCyl(&buf, x, y, z, 0.09f * sc, 0.07f * sc, 0.55f * sc, 5, Melt((Color){ 84, 60, 40, 255 }, fade));
+            PropCyl(&buf, x, y + 0.45f * sc, z, 0.55f * sc, 0.02f * sc, 1.7f * sc, 5, Melt((Color){ 30, 90, 58, 255 }, fade));
+        } else if (p->kind == 2) {
+            PropCube(&buf, x, y + 0.25f * sc, z, 0.7f * sc, 0.45f * sc, 0.55f * sc, Melt((Color){ 128, 126, 120, 255 }, fade));
+        } else if (p->kind == 3) {
+            PropCube(&buf, x, y + 0.7f * sc, z, 1.6f * sc, 1.3f * sc, 1.4f * sc, Melt((Color){ 196, 168, 140, 255 }, fade));
+            PropCyl(&buf, x, y + 1.35f * sc, z, 1.15f * sc, 0.05f * sc, 0.7f * sc, 4, Melt((Color){ 150, 64, 52, 255 }, fade));
+        } else if (p->kind == 4) {
+            PropCube(&buf, x, y + 1.15f * sc, z, 3.6f * sc, 2.3f * sc, 2.3f * sc, Melt((Color){ 176, 84, 62, 255 }, fade));
+            PropCube(&buf, x, y + 2.45f * sc, z, 3.9f * sc, 0.38f * sc, 2.55f * sc, Melt((Color){ 148, 42, 40, 255 }, fade));
+            PropCyl(&buf, x + 2.35f * sc, y, z + 0.2f, 0.55f * sc, 0.55f * sc, 2.8f * sc, 6, Melt((Color){ 198, 198, 190, 255 }, fade));
+            PropCyl(&buf, x + 2.35f * sc, y + 2.7f * sc, z + 0.2f, 0.7f * sc, 0.05f * sc, 0.35f * sc, 6, Melt((Color){ 150, 150, 146, 255 }, fade));
+        } else {
+            float tall = (p->kind == 6) ? 1.45f : 1.0f;
+            float height = (14.0f + sc * 7.0f) * tall;
+            float w = (p->kind == 6) ? 12.0f + sc * 2.0f : 22.0f + sc * 4.0f;
+            float d = w * 0.72f;
+            Color wall = (p->kind == 6) ? (Color){ 118, 128, 140, 255 } : (Color){ 188, 176, 160, 255 };
+            if (((int)floorf(x + z) & 1) != 0) wall = (Color){ 164, 172, 180, 255 };
+            PropCube(&buf, x, y + height * 0.5f, z, w, height, d, Melt(wall, fade));
+            PropCube(&buf, x, y + height + 0.12f, z, w + 0.35f, 0.28f, d + 0.35f, Melt((Color){ 92, 96, 102, 255 }, fade));
+            Color glass = Melt((Color){ 64, 92, 112, 255 }, fade);
+            float band = height * 0.42f;
+            PropCube(&buf, x, y + height * 0.55f, z + d * 0.5f + 0.04f, w * 0.72f, band, 0.08f, glass);
+            PropCube(&buf, x + w * 0.5f + 0.04f, y + height * 0.55f, z, 0.08f, band, d * 0.72f, glass);
+        }
+    }
+    if (buf.count < 3) {
+        MemFree(buf.v);
+        MemFree(buf.n);
+        MemFree(buf.c);
+        MemFree(buf.uv);
+        return;
+    }
+    Mesh mesh;
+    memset(&mesh, 0, sizeof(mesh));
+    mesh.vertexCount = buf.count;
+    mesh.triangleCount = buf.count / 3;
+    mesh.vertices = buf.v;
+    mesh.normals = buf.n;
+    mesh.colors = buf.c;
+    mesh.texcoords = buf.uv;
+    UploadMesh(&mesh, 0);
+    s->propMesh = mesh;
+    s->propMeshReady = 1;
 }
 
 static void DrawClouds(const Balloon* b)
@@ -1480,7 +1610,7 @@ void Scene_Draw(Scene* s, Vector3 eye)
         if (!s->clip[i].ready) continue;
         DrawMesh(s->clip[i].mesh, s->groundMat, MatrixIdentity());
     }
-    for (int p = 0; p < s->propCount; p++) DrawProp(&s->props[p]);
+    if (s->propMeshReady) DrawMesh(s->propMesh, s->material, MatrixIdentity());
     /* Clouds are scenery. They must not hide the gondola when the balloon
      * climbs through their layer, or the posts draw on top of a missing floor. */
     BeginBlendMode(BLEND_ALPHA);
