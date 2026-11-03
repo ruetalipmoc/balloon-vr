@@ -224,7 +224,7 @@ static void AddProps(int cx, int cz, float x0, float z0, float size, int lod,
 int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh* out)
 {
     memset(out, 0, sizeof(*out));
-    int grid = Terrain_EffectiveGrid(cx, cz, lod);
+    int grid = Terrain_EffectiveGrid(cx, cz, lod, viewX, viewZ);
     float size = TERRAIN_CHUNK_SIZE;
     float x0 = (float)cx * size;
     float z0 = (float)cz * size;
@@ -355,31 +355,6 @@ static void FarQuad(FarBuf* b, float x0, float z0, float x1, float z1,
                     float oL, float oR, float oB, float oT, float snap, float step,
                     float viewX, float viewZ)
 {
-    float y00 = BandHeight(x0, z0, oL, oR, oB, oT, snap);
-    float y10 = BandHeight(x1, z0, oL, oR, oB, oT, snap);
-    float y11 = BandHeight(x1, z1, oL, oR, oB, oT, snap);
-    float y01 = BandHeight(x0, z1, oL, oR, oB, oT, snap);
-    float span = x1 - x0;
-    if (z1 - z0 > span) span = z1 - z0;
-    float minY = y00;
-    float maxY = y00;
-    if (y10 < minY) minY = y10;
-    if (y11 < minY) minY = y11;
-    if (y01 < minY) minY = y01;
-    if (y10 > maxY) maxY = y10;
-    if (y11 > maxY) maxY = y11;
-    if (y01 > maxY) maxY = y01;
-    /* Keep following the bank down to the same 4 m grid the chunks use,
-     * so the shore does not jump when this cell becomes a detailed tile. */
-    if (span > 4.5f && minY < TERRAIN_WATER + 2.0f && maxY > TERRAIN_WATER - 0.4f && b->count < 180000) {
-        float xm = (x0 + x1) * 0.5f;
-        float zm = (z0 + z1) * 0.5f;
-        FarQuad(b, x0, z0, xm, zm, oL, oR, oB, oT, snap, step, viewX, viewZ);
-        FarQuad(b, xm, z0, x1, zm, oL, oR, oB, oT, snap, step, viewX, viewZ);
-        FarQuad(b, x0, zm, xm, z1, oL, oR, oB, oT, snap, step, viewX, viewZ);
-        FarQuad(b, xm, zm, x1, z1, oL, oR, oB, oT, snap, step, viewX, viewZ);
-        return;
-    }
     FarTri(b, x0, z0, x1, z1, x1, z0, oL, oR, oB, oT, snap, step, viewX, viewZ);
     FarTri(b, x0, z0, x0, z1, x1, z1, oL, oR, oB, oT, snap, step, viewX, viewZ);
 }

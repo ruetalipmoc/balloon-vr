@@ -357,10 +357,19 @@ static int NeighborhoodWater(int cx, int cz)
     return 0;
 }
 
-int Terrain_EffectiveGrid(int cx, int cz, int lod)
+int Terrain_EffectiveGrid(int cx, int cz, int lod, float viewX, float viewZ)
 {
-    if (NeighborhoodWater(cx, cz)) return 16;
-    return Terrain_GridForLod(lod);
+    int g = Terrain_GridForLod(lod);
+    float mx = ((float)cx + 0.5f) * TERRAIN_CHUNK_SIZE;
+    float mz = ((float)cz + 0.5f) * TERRAIN_CHUNK_SIZE;
+    float dist = hypotf(mx - viewX, mz - viewZ);
+    /* 4 m cells only within 240 m, 8 m out to 480 m. Past that the shore
+     * is small on screen and the coarse grid is enough. */
+    if (dist > 480.0f) return g;
+    if (!NeighborhoodWater(cx, cz)) return g;
+    if (dist <= 240.0f && g < 16) return 16;
+    if (g < 8) return 8;
+    return g;
 }
 
 static int ChunkLod(int cx, int cz, float viewX, float viewZ)
@@ -423,7 +432,7 @@ TerrainSample Terrain_Sample(int jx, int jz, int grid, float x0, float z0, float
     else if (jx == grid) ncx = cx + 1;
     else if (jz == 0) ncz = cz - 1;
     else ncz = cz + 1;
-    int neighbor = Terrain_EffectiveGrid(ncx, ncz, ChunkLod(ncx, ncz, viewX, viewZ));
+    int neighbor = Terrain_EffectiveGrid(ncx, ncz, ChunkLod(ncx, ncz, viewX, viewZ), viewX, viewZ);
     if (neighbor >= grid) return s;
 
     if (onX) SnapToCoarse(s.x, s.z, z0, size, neighbor, 0, &s);
