@@ -97,12 +97,45 @@ static float Perlin(float x, float z)
 
 float NewGen_Height(float x, float z)
 {
-    /* Same stack everywhere. A coarser tile just samples it less often. */
-    float h = 14.0f;
-    h += Perlin(x * 0.00022f, z * 0.00022f) * 36.0f;
-    h += Perlin(x * 0.0009f, z * 0.0009f) * 22.0f;
-    h += Perlin(x * 0.0034f, z * 0.0034f) * 9.0f;
-    h += Perlin(x * 0.012f, z * 0.012f) * 2.6f;
+    /* Warp first, so the same hills do not line up with the axes.
+     * The offset is another, slower noise. Two samples. */
+    float wx = Perlin(x * 0.00012f + 40.0f, z * 0.00012f) * 1100.0f;
+    float wz = Perlin(x * 0.00012f, z * 0.00012f + 40.0f) * 1100.0f;
+    float sx = x + wx;
+    float sz = z + wz;
+
+    float h = 12.0f;
+    h += Perlin(sx * 0.00022f, sz * 0.00022f) * 26.0f;
+    h += Perlin(sx * 0.0009f, sz * 0.0009f) * 12.0f;
+    h += Perlin(sx * 0.0034f, sz * 0.0034f) * 4.5f;
+    h += Perlin(sx * 0.012f, sz * 0.012f) * 1.4f;
+
+    /* A slow mask: plains where it is low, a range where it is high.
+     * Ridges are 1 - |noise|, squared, and each finer octave is kept
+     * only on the crest of the previous one (Musgrave). */
+    float mask = Perlin(sx * 0.00022f + 120.0f, sz * 0.00022f) * 0.5f + 0.5f;
+    mask = (mask - 0.38f) / 0.28f;
+    if (mask < 0.0f) mask = 0.0f;
+    if (mask > 1.0f) mask = 1.0f;
+    mask = mask * mask * (3.0f - 2.0f * mask);
+
+    float ridge = 0.0f;
+    float weight = 1.0f;
+    float amp = 42.0f;
+    float freq = 0.0011f;
+    for (int oct = 0; oct < 4; oct++) {
+        float n = Perlin(sx * freq + 19.0f, sz * freq + 7.0f);
+        if (n > 1.0f) n = 1.0f;
+        if (n < -1.0f) n = -1.0f;
+        float crest = 1.0f - fabsf(n);
+        crest = crest * crest * weight;
+        ridge += crest * amp;
+        weight = crest * 1.4f;
+        if (weight > 1.0f) weight = 1.0f;
+        freq *= 2.05f;
+        amp *= 0.45f;
+    }
+    h += ridge * mask;
     if (h < 0.0f) h = 0.0f;
     return h;
 }
