@@ -711,6 +711,7 @@ void Scene_Update(Scene* s, const HandInput hands[2], float dt, int keyBurner, i
     s->groundY = Terrain_GroundAt(s->balloon.x, s->balloon.z);
     Balloon_Update(&s->balloon, dt, s->groundY);
     s->simTime += dt;
+    if (NewGen_Active()) NewGen_ScrollClouds(dt, s->balloon.altitude);
 
     float targetFlame = s->balloon.burner;
     float targetVent = s->balloon.vent;

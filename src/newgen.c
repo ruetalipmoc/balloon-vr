@@ -1,6 +1,7 @@
 #include "newgen.h"
 
 #include "terrain.h"
+#include "wind.h"
 
 #include "raylib.h"
 #include "raymath.h"
@@ -34,7 +35,10 @@ static int g_haveCenter = 0;
 static Shader g_shader;
 static int g_locEye = -1;
 static int g_locFog = -1;
+static int g_locCloud = -1;
 static int g_fog = 1;
+static float g_cloudX = 0.0f;
+static float g_cloudZ = 0.0f;
 static Material g_mat;
 
 typedef struct Sheet {
@@ -347,7 +351,21 @@ static const char* FS_330 =
     "out vec4 finalColor;\n"
     "uniform vec2 uEye;\n"
     "uniform float uFog;\n"
+    "uniform vec2 uCloud;\n"
     "uniform vec4 colDiffuse;\n"
+    "float NgHash(vec2 p) {\n"
+    "    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);\n"
+    "}\n"
+    "float NgNoise(vec2 p) {\n"
+    "    vec2 i = floor(p);\n"
+    "    vec2 f = fract(p);\n"
+    "    f = f * f * (3.0 - 2.0 * f);\n"
+    "    float a = NgHash(i);\n"
+    "    float b = NgHash(i + vec2(1.0, 0.0));\n"
+    "    float c = NgHash(i + vec2(0.0, 1.0));\n"
+    "    float d = NgHash(i + vec2(1.0, 1.0));\n"
+    "    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);\n"
+    "}\n"
     "void main() {\n"
     "    float h = vWorld.y;\n"
     "    vec3 sand = vec3(0.78, 0.72, 0.46);\n"
@@ -374,6 +392,9 @@ static const char* FS_330 =
     "                     min(vWorld.z + 6144.0, 6144.0 - vWorld.z));\n"
     "    float fog = smoothstep(2400.0, 5600.0, dist);\n"
     "    fog = max(fog, 1.0 - smoothstep(160.0, 1500.0, edge));\n"
+    "    float cloud = NgNoise(vWorld.xz * 0.00032 + uCloud);\n"
+    "    cloud = cloud * 0.65 + 0.35 * NgNoise(vWorld.xz * 0.00085 + uCloud * 1.8);\n"
+    "    c *= mix(1.0, mix(0.85, 1.0, cloud), 1.0 - clamp(fog, 0.0, 1.0));\n"
     "    c = mix(c, vec3(0.910, 0.824, 0.706), clamp(fog, 0.0, 1.0) * uFog);\n"
     "    finalColor = vec4(c, 1.0) * colDiffuse;\n"
     "}\n";
@@ -399,7 +420,21 @@ static const char* FS_100 =
     "varying vec3 vWorld;\n"
     "uniform vec2 uEye;\n"
     "uniform float uFog;\n"
+    "uniform vec2 uCloud;\n"
     "uniform vec4 colDiffuse;\n"
+    "float NgHash(vec2 p) {\n"
+    "    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);\n"
+    "}\n"
+    "float NgNoise(vec2 p) {\n"
+    "    vec2 i = floor(p);\n"
+    "    vec2 f = fract(p);\n"
+    "    f = f * f * (3.0 - 2.0 * f);\n"
+    "    float a = NgHash(i);\n"
+    "    float b = NgHash(i + vec2(1.0, 0.0));\n"
+    "    float c = NgHash(i + vec2(0.0, 1.0));\n"
+    "    float d = NgHash(i + vec2(1.0, 1.0));\n"
+    "    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);\n"
+    "}\n"
     "void main() {\n"
     "    float h = vWorld.y;\n"
     "    vec3 sand = vec3(0.78, 0.72, 0.46);\n"
@@ -426,6 +461,9 @@ static const char* FS_100 =
     "                     min(vWorld.z + 6144.0, 6144.0 - vWorld.z));\n"
     "    float fog = smoothstep(2400.0, 5600.0, dist);\n"
     "    fog = max(fog, 1.0 - smoothstep(160.0, 1500.0, edge));\n"
+    "    float cloud = NgNoise(vWorld.xz * 0.00032 + uCloud);\n"
+    "    cloud = cloud * 0.65 + 0.35 * NgNoise(vWorld.xz * 0.00085 + uCloud * 1.8);\n"
+    "    c *= mix(1.0, mix(0.85, 1.0, cloud), 1.0 - clamp(fog, 0.0, 1.0));\n"
     "    c = mix(c, vec3(0.910, 0.824, 0.706), clamp(fog, 0.0, 1.0) * uFog);\n"
     "    gl_FragColor = vec4(c, 1.0) * colDiffuse;\n"
     "}\n";
@@ -693,6 +731,7 @@ void NewGen_Begin(unsigned int seed)
     if (g_ownShader) g_mat.shader = g_shader;
     g_locEye = GetShaderLocation(g_shader, "uEye");
     g_locFog = GetShaderLocation(g_shader, "uFog");
+    g_locCloud = GetShaderLocation(g_shader, "uCloud");
     NewGen_SetFog(1);
     printf("newgen seed %u   sheet %.1f km at %.0f m   tiles %.0f m\n",
            seed, NG_MAP / 1000.0f, NG_SPACE, NG_TILE);
@@ -705,6 +744,16 @@ void NewGen_SetFog(int on)
         float v = g_fog ? 1.0f : 0.0f;
         SetShaderValue(g_shader, g_locFog, &v, SHADER_UNIFORM_FLOAT);
     }
+}
+
+void NewGen_ScrollClouds(float dt, float altitude)
+{
+    if (!g_on || dt <= 0.0f) return;
+    if (dt > 0.05f) dt = 0.05f;
+    WindSample wind;
+    Wind_AtAltitude(altitude, &wind);
+    g_cloudX += wind.x * dt * 0.00032f;
+    g_cloudZ += wind.z * dt * 0.00032f;
 }
 
 void NewGen_Update(float x, float z)
@@ -725,6 +774,10 @@ void NewGen_Draw(float eyeX, float eyeZ)
     if (g_locEye >= 0) {
         float eye[2] = { eyeX, eyeZ };
         SetShaderValue(g_shader, g_locEye, eye, SHADER_UNIFORM_VEC2);
+    }
+    if (g_locCloud >= 0) {
+        float cloud[2] = { g_cloudX, g_cloudZ };
+        SetShaderValue(g_shader, g_locCloud, cloud, SHADER_UNIFORM_VEC2);
     }
     for (int i = 0; i < NG_SIDE * NG_SIDE; i++) {
         if (!g_sheet[i].ready) continue;
