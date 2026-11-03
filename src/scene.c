@@ -1,3 +1,4 @@
+#include "newgen.h"
 #include "scene.h"
 
 #include "ground_shader.h"
@@ -1579,7 +1580,7 @@ static void DrawParticles(const Scene* s)
  * bank and the two cannot flicker against each other. */
 void Scene_Draw(Scene* s, Vector3 eye)
 {
-    UpdateClip(s);
+    if (!NewGen_Active()) UpdateClip(s);
 
     rlDisableDepthMask();
     rlDisableBackfaceCulling();
@@ -1595,6 +1596,10 @@ void Scene_Draw(Scene* s, Vector3 eye)
      * so the mesh only has to carry the shape and the cover weights. */
     rlPushMatrix();
     rlTranslatef(-s->balloon.x, -s->balloon.altitude, -s->balloon.z);
+    if (NewGen_Active()) {
+        NewGen_Update(s->balloon.x, s->balloon.z);
+        NewGen_Draw(s->balloon.x, s->balloon.z);
+    } else {
     if (s->locEye >= 0) {
         float eye[2] = { s->balloon.x, s->balloon.z };
         SetShaderValue(s->groundMat.shader, s->locEye, eye, SHADER_UNIFORM_VEC2);
@@ -1611,6 +1616,7 @@ void Scene_Draw(Scene* s, Vector3 eye)
         DrawMesh(s->clip[i].mesh, s->groundMat, MatrixIdentity());
     }
     if (s->propMeshReady) DrawMesh(s->propMesh, s->material, MatrixIdentity());
+    }
     /* Clouds are scenery. They must not hide the gondola when the balloon
      * climbs through their layer, or the posts draw on top of a missing floor. */
     BeginBlendMode(BLEND_ALPHA);

@@ -20,6 +20,10 @@
 #define TERRAIN_FIELD      128.0f
 #define TERRAIN_CITY_BLOCK 64.0f
 
+/* If set, Terrain_Height uses this instead of the drained field.
+ * The newgen experiment installs one. NULL keeps the default. */
+void Terrain_SetHeightFn(float (*fn)(float x, float z));
+
 float Terrain_Height(float x, float z);
 float Terrain_Moisture(float x, float z);
 int Terrain_Zone(float x, float z);

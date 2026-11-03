@@ -31,6 +31,7 @@ emcc -std=gnu11 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initi
   "$ROOT/src/handles.c" \
   "$ROOT/src/terrain.c" \
   "$ROOT/src/terrain_mesh.c" \
+  "$ROOT/src/newgen.c" \
   "$ROOT/src/scene.c" \
   "$ROOT/src/watch.c" \
   "$ROOT/src/xr_stub.c" \

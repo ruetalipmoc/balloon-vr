@@ -20,7 +20,7 @@ LDFLAGS ?=
 
 APP     := balloon-vr
 SRC     := src/main.c src/wind.c src/balloon.c src/handles.c src/terrain.c \
-           src/terrain_mesh.c src/scene.c src/watch.c src/xr_glx.c src/xr_session.c
+           src/terrain_mesh.c src/newgen.c src/scene.c src/watch.c src/xr_glx.c src/xr_session.c
 
 ifeq ($(RAYLIB_DIR),)
   ifneq ($(wildcard third_party/raylib/src/libraylib.a),)

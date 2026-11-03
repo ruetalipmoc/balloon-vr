@@ -326,8 +326,16 @@ static Land LandAt(float x, float z)
     return land;
 }
 
+static float (*g_heightFn)(float x, float z) = 0;
+
+void Terrain_SetHeightFn(float (*fn)(float x, float z))
+{
+    g_heightFn = fn;
+}
+
 float Terrain_Height(float x, float z)
 {
+    if (g_heightFn) return g_heightFn(x, z);
     float h = 0.0f, wet = 0.0f;
     SampleDrain(x, z, &h, &wet);
     return h;

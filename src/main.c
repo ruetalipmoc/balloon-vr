@@ -2,6 +2,7 @@
  * Desktop fallback: mouse look, F / left mouse burns, G / right mouse vents.
  * Headset: squeeze either ceiling handle and pull it down. The left wrist
  * carries the instrument. */
+#include "newgen.h"
 #include "scene.h"
 #include "terrain.h"
 #include "world.h"
@@ -286,7 +287,7 @@ static int ParseInt(const char* s, int* out)
 
 static void PrintUsage(void)
 {
-    printf("balloon-vr [--desktop] [--view METRES] [--lod RINGS]\n");
+    printf("balloon-vr [--desktop] [--view METRES] [--lod RINGS] [--newgen] [--seed N]\n");
     printf("  Headset: pull the red ceiling handle to burn, the green one to vent.\n");
     printf("  Desktop: mouse look, F/left mouse burns, G/right mouse vents.\n");
     printf("  --view   Radius of the finest ring at %.0f m above the ground\n", TERRAIN_ALT_REF);
@@ -296,11 +297,16 @@ static void PrintUsage(void)
     printf("  --lod    How many rings (default %d, range %d..%d). Each ring is\n",
            TERRAIN_RINGS_DEFAULT, TERRAIN_RINGS_MIN, TERRAIN_RINGS_MAX);
     printf("           twice as coarse as the one inside it.\n");
+    printf("  --newgen Precompute a low-res Perlin sheet and refine it in\n");
+    printf("           nested tiles around the basket. No trees or buildings.\n");
+    printf("  --seed   Integer seed for --newgen (default 1).\n");
 }
 
 int main(int argc, char** argv)
 {
     int forceDesktop = 0;
+    int newgen = 0;
+    unsigned int seed = 1;
     float view = TERRAIN_VIEW_DEFAULT;
     int rings = TERRAIN_RINGS_DEFAULT;
 #ifdef __EMSCRIPTEN__
@@ -321,6 +327,20 @@ int main(int argc, char** argv)
                 fprintf(stderr, "bad --lod (want a ring count, e.g. 6)\n");
                 return 1;
             }
+        } else if (strcmp(argv[i], "--newgen") == 0) {
+            newgen = 1;
+        } else if (strcmp(argv[i], "--seed") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "bad --seed (want an integer)\n");
+                return 1;
+            }
+            char* end = NULL;
+            unsigned long s = strtoul(argv[++i], &end, 10);
+            if (end == argv[i] || (end && *end != '\0')) {
+                fprintf(stderr, "bad --seed (want an integer)\n");
+                return 1;
+            }
+            seed = (unsigned int)s;
         } else {
             fprintf(stderr, "unknown option %s\n", argv[i]);
             PrintUsage();
@@ -347,8 +367,9 @@ int main(int argc, char** argv)
     InitWindow(1440, 900, "Balloon VR");
     SetTargetFPS(72);
 #endif
-    rlSetClipPlanes(0.05, Terrain_FarPlane());
+    rlSetClipPlanes(0.05, newgen ? NewGen_FarPlane() : Terrain_FarPlane());
     srand(0xB411u);
+    if (newgen) NewGen_Begin(seed);
 
     Scene* scene = Scene_Create();
     if (!scene) {
@@ -416,7 +437,7 @@ int main(int argc, char** argv)
                 mirror.projection = CAMERA_PERSPECTIVE;
                 BeginDrawing();
                 ClearBackground((Color){ 232, 210, 180, 255 });
-                rlSetClipPlanes(0.05, Terrain_FarPlane());
+                rlSetClipPlanes(0.05, newgen ? NewGen_FarPlane() : Terrain_FarPlane());
                 BeginMode3D(mirror);
                 Scene_Draw(scene, mirror.position);
                 EndMode3D();
@@ -445,7 +466,7 @@ int main(int argc, char** argv)
 
         BeginDrawing();
         ClearBackground((Color){ 232, 210, 180, 255 });
-        rlSetClipPlanes(0.05, Terrain_FarPlane());
+        rlSetClipPlanes(0.05, newgen ? NewGen_FarPlane() : Terrain_FarPlane());
         BeginMode3D(camera);
         Scene_Draw(scene, eye);
         EndMode3D();
@@ -470,6 +491,7 @@ int main(int argc, char** argv)
     }
 
     if (xr) XR_Shutdown();
+    NewGen_Shutdown();
     Scene_Destroy(scene);
     CloseWindow();
     return 0;
