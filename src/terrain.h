@@ -49,6 +49,10 @@ float Terrain_GroundAt(float x, float z);
 int Terrain_LodForDistance(float distMeters);
 int Terrain_GridForLod(int lod);
 
+/* Grid actually used for a chunk. Banks and their neighbours stay on the
+ * finest grid, so a shore does not jump when the distance level changes. */
+int Terrain_EffectiveGrid(int cx, int cz, int lod);
+
 /* Clamp and store the draw distance used at TERRAIN_ALT_REF. The value
  * actually used this frame may be larger once altitude is applied. */
 float Terrain_SetViewDistance(float meters);

@@ -305,6 +305,64 @@ int Terrain_GridForLod(int lod)
     }
 }
 
+/* Deterministic, so the answer is cached for the life of the process. */
+#define WATER_CACHE 4096
+static int g_wcX[WATER_CACHE];
+static int g_wcZ[WATER_CACHE];
+static unsigned char g_wcV[WATER_CACHE]; /* 0 empty, 1 dry, 2 wet */
+
+static int ChunkTouchesWater(int cx, int cz)
+{
+    unsigned int h = (unsigned int)(cx * 374761393) ^ (unsigned int)(cz * 668265263);
+    int slot = (int)(h % WATER_CACHE);
+    for (int n = 0; n < 24; n++) {
+        int i = (slot + n) % WATER_CACHE;
+        if (g_wcV[i] == 0) break;
+        if (g_wcX[i] == cx && g_wcZ[i] == cz) return g_wcV[i] == 2;
+    }
+
+    const int n = 8;
+    float x0 = (float)cx * TERRAIN_CHUNK_SIZE;
+    float z0 = (float)cz * TERRAIN_CHUNK_SIZE;
+    float step = TERRAIN_CHUNK_SIZE / (float)n;
+    float minY = 1.0e9f;
+    float maxY = -1.0e9f;
+    for (int j = 0; j <= n; j++) {
+        for (int i = 0; i <= n; i++) {
+            float y = Terrain_Height(x0 + (float)i * step, z0 + (float)j * step);
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+        }
+    }
+    /* Deep water and dry hills do not own the shoreline. A bank does. */
+    int wet = (minY < TERRAIN_WATER + 2.0f && maxY > TERRAIN_WATER - 0.4f) ? 2 : 1;
+
+    for (int ntry = 0; ntry < 24; ntry++) {
+        int i = (slot + ntry) % WATER_CACHE;
+        if (g_wcV[i] == 0 || (g_wcX[i] == cx && g_wcZ[i] == cz)) {
+            g_wcX[i] = cx;
+            g_wcZ[i] = cz;
+            g_wcV[i] = (unsigned char)wet;
+            break;
+        }
+    }
+    return wet == 2;
+}
+
+static int NeighborhoodWater(int cx, int cz)
+{
+    if (ChunkTouchesWater(cx, cz)) return 1;
+    if (ChunkTouchesWater(cx - 1, cz) || ChunkTouchesWater(cx + 1, cz)) return 1;
+    if (ChunkTouchesWater(cx, cz - 1) || ChunkTouchesWater(cx, cz + 1)) return 1;
+    return 0;
+}
+
+int Terrain_EffectiveGrid(int cx, int cz, int lod)
+{
+    if (NeighborhoodWater(cx, cz)) return 16;
+    return Terrain_GridForLod(lod);
+}
+
 static int ChunkLod(int cx, int cz, float viewX, float viewZ)
 {
     float mx = ((float)cx + 0.5f) * TERRAIN_CHUNK_SIZE;
@@ -359,11 +417,13 @@ TerrainSample Terrain_Sample(int jx, int jz, int grid, float x0, float z0, float
     if (!onX && !onZ) return s;
     if (onX && onZ) return s;
 
-    int neighbor = grid;
-    if (jx == 0) neighbor = Terrain_GridForLod(ChunkLod(cx - 1, cz, viewX, viewZ));
-    else if (jx == grid) neighbor = Terrain_GridForLod(ChunkLod(cx + 1, cz, viewX, viewZ));
-    else if (jz == 0) neighbor = Terrain_GridForLod(ChunkLod(cx, cz - 1, viewX, viewZ));
-    else neighbor = Terrain_GridForLod(ChunkLod(cx, cz + 1, viewX, viewZ));
+    int ncx = cx;
+    int ncz = cz;
+    if (jx == 0) ncx = cx - 1;
+    else if (jx == grid) ncx = cx + 1;
+    else if (jz == 0) ncz = cz - 1;
+    else ncz = cz + 1;
+    int neighbor = Terrain_EffectiveGrid(ncx, ncz, ChunkLod(ncx, ncz, viewX, viewZ));
     if (neighbor >= grid) return s;
 
     if (onX) SnapToCoarse(s.x, s.z, z0, size, neighbor, 0, &s);
