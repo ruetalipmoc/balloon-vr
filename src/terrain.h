@@ -23,6 +23,10 @@ float Terrain_Height(float x, float z);
 float Terrain_Moisture(float x, float z);
 int Terrain_Zone(float x, float z);
 
+/* Soft cover masks, each 0..1. The ground shader paints fields and streets
+ * per pixel; these weights only say which cover is allowed here. */
+void Terrain_Cover(float x, float z, float* city, float* farm, float* forest, float* highland);
+
 /* Unit normal from central differences. ny is positive on a flat field. */
 void Terrain_Normal(float x, float z, float* nx, float* ny, float* nz);
 

@@ -30,77 +30,18 @@ static Color LerpColor(Color a, Color b, float t)
 
 static Color ApplyHaze(Color c, float fog);
 
-static Color GroundColor(float x, float z, float h, float slopeY, float fog, float step)
+/* Packed into the vertex colour for the ground shader: r city, g farm,
+ * b forest, a highland. The pixel shader paints the actual pattern. */
+static Color CoverColor(float x, float z)
 {
-    Color grassA = { 86, 166, 74, 255 };
-    Color grassB = { 58, 132, 62, 255 };
-    Color forestA = { 34, 92, 48, 255 };
-    Color forestB = { 24, 70, 40, 255 };
-    Color sand = { 214, 196, 138, 255 };
-    Color rock = { 142, 138, 128, 255 };
-    Color snow = { 236, 242, 246, 255 };
-    Color hedge = { 58, 104, 52, 255 };
-    Color asphalt = { 74, 78, 84, 255 };
-    Color crops[5] = {
-        { 206, 176, 64, 255 },
-        { 78, 154, 64, 255 },
-        { 158, 106, 64, 255 },
-        { 138, 174, 78, 255 },
-        { 220, 196, 62, 255 }
-    };
-    Color blocks[3] = {
-        { 168, 164, 156, 255 },
-        { 186, 178, 166, 255 },
-        { 150, 156, 162, 255 }
-    };
-
-    /* A coarse quad cannot draw a hedge or a street. Sampling those thin
-     * lines at its corners and interpolating paints a diamond across the
-     * cell, which reads as a tiled grid from the basket. */
-    int coarse = step >= 14.0f;
-    float freq = coarse ? (step >= 28.0f ? 0.012f : 0.03f) : 0.07f;
-    float patch = (float)(CellHash((int)floorf(x * freq), (int)floorf(z * freq)) & 255) / 255.0f;
-    int zone = Terrain_Zone(x, z);
-    Color c = LerpColor(grassA, grassB, patch);
-
-    if (zone == TERRAIN_ZONE_FOREST) c = LerpColor(forestA, forestB, patch);
-    if (zone == TERRAIN_ZONE_HIGHLAND) c = LerpColor(grassB, forestA, 0.35f);
-
-    if (zone == TERRAIN_ZONE_FARM && h > TERRAIN_WATER + 1.2f) {
-        float gx = floorf(x / TERRAIN_FIELD);
-        float gz = floorf(z / TERRAIN_FIELD);
-        float u = x / TERRAIN_FIELD - gx;
-        float v = z / TERRAIN_FIELD - gz;
-        if (!coarse && (u < 0.07f || v < 0.07f)) c = hedge;
-        else c = crops[CellHash((int)gx, (int)gz) % 5u];
-    }
-
-    if (zone == TERRAIN_ZONE_CITY && h > TERRAIN_WATER + 1.0f) {
-        float bx = floorf(x / TERRAIN_CITY_BLOCK);
-        float bz = floorf(z / TERRAIN_CITY_BLOCK);
-        float u = x / TERRAIN_CITY_BLOCK - bx;
-        float v = z / TERRAIN_CITY_BLOCK - bz;
-        if (!coarse && (u < 0.18f || v < 0.18f)) c = asphalt;
-        else if ((CellHash((int)bx, (int)bz) % 11u) == 0u) c = LerpColor(grassA, grassB, 0.4f);
-        else c = blocks[CellHash((int)bx + 3, (int)bz - 1) % 3u];
-    }
-
-    if (zone != TERRAIN_ZONE_FARM && zone != TERRAIN_ZONE_CITY && h < TERRAIN_WATER + 2.4f && h >= TERRAIN_WATER) {
-        c = LerpColor(sand, c, (h - TERRAIN_WATER) / 2.4f);
-    }
-    if (zone == TERRAIN_ZONE_HIGHLAND && slopeY < 0.88f) {
-        float rockT = (0.88f - slopeY) / 0.30f;
-        c = LerpColor(c, rock, Clampf(rockT, 0.0f, 1.0f));
-    } else if (zone != TERRAIN_ZONE_FARM && zone != TERRAIN_ZONE_CITY && slopeY < 0.70f) {
-        float rockT = (0.70f - slopeY) / 0.28f;
-        c = LerpColor(c, rock, Clampf(rockT, 0.0f, 1.0f));
-    }
-    if (h > 52.0f) {
-        float snowT = (h - 52.0f) / 18.0f;
-        c = LerpColor(c, snow, Clampf(snowT, 0.0f, 1.0f));
-    }
-    if (h < TERRAIN_WATER) c = (Color){ 46, 110, 150, 255 };
-    return ApplyHaze(c, fog);
+    float city, farm, forest, highland;
+    Terrain_Cover(x, z, &city, &farm, &forest, &highland);
+    Color c;
+    c.r = (unsigned char)(Clampf(city, 0.0f, 1.0f) * 255.0f + 0.5f);
+    c.g = (unsigned char)(Clampf(farm, 0.0f, 1.0f) * 255.0f + 0.5f);
+    c.b = (unsigned char)(Clampf(forest, 0.0f, 1.0f) * 255.0f + 0.5f);
+    c.a = (unsigned char)(Clampf(highland, 0.0f, 1.0f) * 255.0f + 0.5f);
+    return c;
 }
 
 /* Aerial perspective. Colour drains toward a hazy blue, then the last of it
@@ -145,7 +86,7 @@ static void VertexShade(float x, float y, float z, float viewX, float viewZ, flo
                         float* nx, float* ny, float* nz, Color* c)
 {
     Terrain_Normal(x, z, nx, ny, nz);
-    *c = GroundColor(x, z, y, *ny, FogAmount(hypotf(x - viewX, z - viewZ)), step);
+    *c = CoverColor(x, z);
 }
 
 /* Border samples that were pulled onto a coarser edge inherit that edge's
@@ -435,17 +376,6 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
             float step = size / (float)grid;
             for (int k = 0; k < 4; k++)
                 SampleShade(&corner[k], viewX, viewZ, step, &nx[k], &ny[k], &nz[k], &col[k]);
-            /* A cell this coarse cannot carry a hedge or a street. One colour
-             * for the whole quad, taken at its middle, so the diagonal does
-             * not paint a diamond. */
-            if (step >= 14.0f) {
-                float mx = (corner[0].x + corner[2].x) * 0.5f;
-                float mz = (corner[0].z + corner[2].z) * 0.5f;
-                Color flat;
-                float fnx, fny, fnz;
-                VertexShade(mx, Terrain_Height(mx, mz), mz, viewX, viewZ, step, &fnx, &fny, &fnz, &flat);
-                col[0] = col[1] = col[2] = col[3] = flat;
-            }
             /* Winding faces up (right-handed Y-up). The other order is culled
              * from the basket, which sits above the mesh. */
             int tris[2][3] = { { 0, 2, 1 }, { 0, 3, 2 } };
@@ -592,12 +522,7 @@ static int FarPush(FarBuf* b, float x, float y, float z, float viewX, float view
     }
     float nx, ny, nz;
     Terrain_Normal(x, z, &nx, &ny, &nz);
-    Color col;
-    if (forced) col = *forced;
-    else {
-        float fog = FogAmount(hypotf(x - viewX, z - viewZ));
-        col = GroundColor(x, z, y, ny, fog, step);
-    }
+    Color col = CoverColor(x, z);
     PushVert(b->v, b->n, b->c, b->uv, b->count, x, y, z, nx, ny, nz, col);
     b->count++;
     return 1;
@@ -611,19 +536,8 @@ static void FarTri(FarBuf* b, float x0, float z0, float x1, float z1, float x2, 
     float zs[3] = { z0, z1, z2 };
     float ys[3];
     for (int i = 0; i < 3; i++) ys[i] = BandHeight(xs[i], zs[i], oL, oR, oB, oT, snap);
-    Color shared;
-    Color* forced = NULL;
-    if (step >= 14.0f) {
-        float cx = (x0 + x1 + x2) / 3.0f;
-        float cz = (z0 + z1 + z2) / 3.0f;
-        float cy = BandHeight(cx, cz, oL, oR, oB, oT, snap);
-        float nx, ny, nz;
-        Terrain_Normal(cx, cz, &nx, &ny, &nz);
-        shared = GroundColor(cx, cy, cz, ny, FogAmount(hypotf(cx - viewX, cz - viewZ)), step);
-        forced = &shared;
-    }
     for (int i = 0; i < 3; i++) {
-        if (!FarPush(b, xs[i], ys[i], zs[i], viewX, viewZ, step, forced)) return;
+        if (!FarPush(b, xs[i], ys[i], zs[i], viewX, viewZ, step, NULL)) return;
     }
 }
 

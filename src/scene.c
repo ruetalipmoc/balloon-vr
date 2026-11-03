@@ -1,5 +1,6 @@
 #include "scene.h"
 
+#include "ground_shader.h"
 #include "sim_math.h"
 #include "terrain.h"
 #include "terrain_mesh.h"
@@ -9,6 +10,7 @@
 #include "raymath.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -57,6 +59,10 @@ struct Scene {
     float farOuter;
     int resetView;
     Material material;
+    Material groundMat;
+    int locEye;
+    int locView;
+    int locWater;
     int meshesReady;
 
     Slot slots[MAX_CHUNKS];
@@ -373,6 +379,23 @@ Scene* Scene_Create(void)
     s->crown = MakeCrown();
     s->sky = MakeSky();
     s->material = LoadMaterialDefault();
+    s->groundMat = LoadMaterialDefault();
+#ifdef PLATFORM_WEB
+    s->groundMat.shader = LoadShaderFromMemory(GROUND_VS_100, GROUND_FS_100);
+#else
+    s->groundMat.shader = LoadShaderFromMemory(GROUND_VS_330, GROUND_FS_330);
+#endif
+    if (s->groundMat.shader.id == 0) {
+        fprintf(stderr, "ground shader failed, using vertex colours\n");
+        s->groundMat.shader = s->material.shader;
+    }
+    s->locEye = GetShaderLocation(s->groundMat.shader, "uEye");
+    s->locView = GetShaderLocation(s->groundMat.shader, "uView");
+    s->locWater = GetShaderLocation(s->groundMat.shader, "uWater");
+    if (s->locWater >= 0) {
+        float water = TERRAIN_WATER;
+        SetShaderValue(s->groundMat.shader, s->locWater, &water, SHADER_UNIFORM_FLOAT);
+    }
     s->meshesReady = 1;
 
     Watch_Init(&s->watch);
@@ -393,6 +416,7 @@ void Scene_Destroy(Scene* s)
         UnloadMesh(s->crown);
         UnloadMesh(s->sky);
         if (s->farReady) UnloadMesh(s->farField);
+        UnloadMaterial(s->groundMat);
         UnloadMaterial(s->material);
     }
     Watch_Shutdown(&s->watch);
@@ -1233,13 +1257,22 @@ void Scene_Draw(Scene* s, Vector3 eye)
     Vector3 sunDir = Vector3Normalize((Vector3){ 0.45f, 0.62f, -0.28f });
     DrawSphere(Vector3Add(eye, Vector3Scale(sunDir, 700.0f)), 22.0f, (Color){ 255, 214, 120, 255 });
 
-    /* World scrolls under a stationary basket. */
+    /* World scrolls under a stationary basket. Ground colour is per pixel,
+     * so the mesh only has to carry the shape and the cover weights. */
     rlPushMatrix();
     rlTranslatef(-s->balloon.x, -s->balloon.altitude, -s->balloon.z);
-    if (s->farReady) DrawMesh(s->farField, s->material, MatrixIdentity());
+    if (s->locEye >= 0) {
+        float eye[2] = { s->balloon.x, s->balloon.z };
+        SetShaderValue(s->groundMat.shader, s->locEye, eye, SHADER_UNIFORM_VEC2);
+    }
+    if (s->locView >= 0) {
+        float view = Terrain_ViewDistance();
+        SetShaderValue(s->groundMat.shader, s->locView, &view, SHADER_UNIFORM_FLOAT);
+    }
+    if (s->farReady) DrawMesh(s->farField, s->groundMat, MatrixIdentity());
     for (int i = 0; i < MAX_CHUNKS; i++) {
         if (!s->slots[i].occupied || !s->slots[i].mesh.ready) continue;
-        DrawMesh(s->slots[i].mesh.ground, s->material, MatrixIdentity());
+        DrawMesh(s->slots[i].mesh.ground, s->groundMat, MatrixIdentity());
     }
     BeginBlendMode(BLEND_ALPHA);
     rlDrawRenderBatchActive();
