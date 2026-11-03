@@ -45,6 +45,7 @@ struct Scene {
     float groundY;
     float flame;
     float ventOpen;
+    float simTime;
     HandInput lastHands[2];
 
     Mesh envelope;
@@ -467,13 +468,15 @@ void Scene_Update(Scene* s, const HandInput hands[2], float dt, int keyBurner, i
 
     s->groundY = Terrain_GroundAt(s->balloon.x, s->balloon.z);
     Balloon_Update(&s->balloon, dt, s->groundY);
+    s->simTime += dt;
 
     float targetFlame = s->balloon.burner;
     float targetVent = s->balloon.vent;
     s->flame += (targetFlame - s->flame) * Minf(1.0f, dt * 8.0f);
     s->ventOpen += (targetVent - s->ventOpen) * Minf(1.0f, dt * 4.0f);
 
-    if (s->flame > 0.15f) {
+    /* dt == 0 is a pause: keep the particles that are already in the air. */
+    if (dt > 0.0f && s->flame > 0.15f) {
         /* Jets sit on top of the burner coils, just under the envelope mouth. */
         float ang = (float)(rand() % 628) / 100.0f;
         float rad = 0.03f + (float)(rand() % 40) / 1000.0f;
@@ -482,14 +485,16 @@ void Scene_Update(Scene* s, const HandInput hands[2], float dt, int keyBurner, i
         Vector3 v = { (float)(rand() % 10 - 5) / 50.0f, 3.0f + s->flame * 2.4f, (float)(rand() % 10 - 5) / 50.0f };
         SpawnParticle(s, 0, p, v, 0.45f + s->flame * 0.25f);
     }
-    if (s->ventOpen > 0.2f) {
+    if (s->ventOpen > 0.2f && dt > 0.0f) {
         Vector3 p = { (float)(rand() % 20 - 10) / 80.0f, ENVELOPE_TOP_Y + s->ventOpen * 0.4f, (float)(rand() % 20 - 10) / 80.0f };
         Vector3 v = { (float)(rand() % 10 - 5) / 30.0f, 2.5f + s->ventOpen * 3.0f, (float)(rand() % 10 - 5) / 30.0f };
         SpawnParticle(s, 1, p, v, 1.1f);
     }
     UpdateParticles(s, dt);
 
-    if (s->audioReady) {
+    if (dt <= 0.0f) {
+        if (s->audioReady && IsSoundPlaying(s->burner)) StopSound(s->burner);
+    } else if (s->audioReady) {
         if (s->flame > 0.05f) {
             SetSoundVolume(s->burner, Clampf(s->flame, 0.0f, 1.0f) * 0.8f);
             if (!IsSoundPlaying(s->burner)) PlaySound(s->burner);
@@ -992,7 +997,7 @@ static void DrawBurner(const Scene* s)
         BeginBlendMode(BLEND_ALPHA);
         rlDisableDepthMask();
         rlDisableBackfaceCulling();
-        float time = (float)GetTime();
+        float time = s->simTime;
         /* Two columns, one over each coil, fanned apart so they stay readable. */
         for (int i = 0; i < 8; i++) {
             float side = (i < 4) ? -1.0f : 1.0f;

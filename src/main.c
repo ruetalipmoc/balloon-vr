@@ -164,14 +164,58 @@ static void DrawHint(int vr)
 {
 #ifdef __EMSCRIPTEN__
     (void)vr;
-    const char* line = "Glisser pour regarder    F bruleur    G soupape    regarder en bas : montre    fleches : pages";
+    const char* line = "Glisser pour regarder    F bruleur    G soupape    P pause    S capture    regarder en bas : montre";
 #else
     const char* line = vr
-        ? "Red burns, green vents.  Left stick turns the watch pages.  Stick click resets the view."
-        : "Click to look.  F burner  G vent  Look down or C: watch  Arrows: pages  Enter: reset view";
+        ? "Red burns, green vents.  P pauses.  S saves a screenshot of this window."
+        : "Click to look.  F burner  G vent  P pause  S screenshot  C: watch  Arrows: pages";
 #endif
     DrawRectangle(0, GetScreenHeight() - 36, GetScreenWidth(), 36, (Color){ 8, 16, 24, 180 });
     DrawText(line, 16, GetScreenHeight() - 26, 18, (Color){ 232, 244, 240, 255 });
+}
+
+static int g_paused = 0;
+
+static void DrawPause(void)
+{
+    if (!g_paused) return;
+    const char* label = "PAUSE";
+    int w = MeasureText(label, 28);
+    DrawText(label, GetScreenWidth() / 2 - w / 2, 48, 28, (Color){ 255, 196, 96, 255 });
+}
+
+/* Grab the window after the frame is drawn, before it is swapped away. */
+static void SaveScreenshot(void)
+{
+    static int serial = 0;
+    char name[64];
+    snprintf(name, sizeof(name), "balloon-%04d.png", ++serial);
+    Image img = LoadImageFromScreen();
+    int ok = ExportImage(img, name);
+    if (ok) printf("screenshot %s (%dx%d)\n", name, img.width, img.height);
+    else fprintf(stderr, "screenshot failed: %s\n", name);
+#ifdef __EMSCRIPTEN__
+    if (ok) {
+        EM_ASM({
+            try {
+                var name = UTF8ToString($0);
+                var data = FS.readFile(name);
+                var blob = new Blob([data], { type: "image/png" });
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement("a");
+                a.href = url;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                console.warn("screenshot download failed", e);
+            }
+        }, name);
+    }
+#endif
+    UnloadImage(img);
 }
 
 static void UpdateDesktopLook(void)
@@ -353,11 +397,13 @@ int main(int argc, char** argv)
             g_yaw = 0.0f;
             g_pitch = 0.22f;
         }
+        if (IsKeyPressed(KEY_P)) g_paused = !g_paused;
+        int shotRequest = IsKeyPressed(KEY_S);
 
         if (xr) {
             XrFrame frame;
             if (XR_BeginFrame(&frame)) {
-                Scene_Update(scene, frame.hands, frame.dt, burn, vent);
+                Scene_Update(scene, frame.hands, g_paused ? 0.0f : frame.dt, burn, vent);
                 if (frame.shouldRender) {
                     for (int eye = 0; eye < frame.eyeCount; eye++) {
                         XR_BeginEye(eye);
@@ -379,6 +425,8 @@ int main(int argc, char** argv)
                 Scene_Draw(scene, mirror.position);
                 EndMode3D();
                 DrawHint(1);
+                DrawPause();
+                if (shotRequest) SaveScreenshot();
                 EndDrawing();
                 continue;
             }
@@ -389,7 +437,7 @@ int main(int argc, char** argv)
         Vector3 forward = BasisForward();
         HandInput hands[2];
         DesktopHands(hands, eye, burn, vent);
-        float dt = GetFrameTime();
+        float dt = g_paused ? 0.0f : GetFrameTime();
         Scene_Update(scene, hands, dt, burn, vent);
 
         Camera3D camera = { 0 };
@@ -405,14 +453,17 @@ int main(int argc, char** argv)
         Scene_Draw(scene, eye);
         EndMode3D();
         DrawHint(0);
+        DrawPause();
         const Balloon* balloon = Scene_Balloon(scene);
         char hud[160];
-        snprintf(hud, sizeof(hud), "AGL %.0f m    V %+.1f m/s    view %.0f    lod %.0f/%.0f/%.0f/%.0f",
+        snprintf(hud, sizeof(hud), "AGL %.0f m    V %+.1f m/s    view %.0f    lod %.0f/%.0f/%.0f/%.0f%s",
                  balloon->altitude - Scene_Ground(scene), balloon->vy,
                  Terrain_ViewDistance(),
                  Terrain_LodThreshold(0), Terrain_LodThreshold(1),
-                 Terrain_LodThreshold(2), Terrain_LodThreshold(3));
+                 Terrain_LodThreshold(2), Terrain_LodThreshold(3),
+                 g_paused ? "    PAUSE" : "");
         DrawText(hud, 16, 16, 20, (Color){ 240, 248, 246, 255 });
+        if (shotRequest) SaveScreenshot();
         const char* shot = getenv("BALLOON_SCREENSHOT");
         static int shotFrame = 0;
         if (shot) {
