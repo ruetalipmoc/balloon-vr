@@ -22,6 +22,8 @@ typedef struct ClipSlot {
     Mesh mesh;
     int ready;
     ClipJob job;
+    Mesh pending;
+    int pendingReady;
 } ClipSlot;
 
 typedef struct Particle {
@@ -45,6 +47,8 @@ struct Scene {
     Mesh crown;
     Mesh sky;
     ClipSlot clip[CLIP_LEVELS];
+    int clipSnap;
+    ClipJob clipTarget[CLIP_LEVELS];
     Prop props[MAX_PROPS];
     int propCount;
     int propsReady;
@@ -615,6 +619,7 @@ void Scene_Destroy(Scene* s)
     if (!s) return;
     for (int i = 0; i < CLIP_LEVELS; i++) {
         if (s->clip[i].ready) UnloadMesh(s->clip[i].mesh);
+        if (s->clip[i].pendingReady) UnloadMesh(s->clip[i].pending);
     }
     if (s->meshesReady) {
         UnloadMesh(s->envelope);
@@ -760,35 +765,73 @@ static void UpdateClip(Scene* s)
     float x = s->balloon.x;
     float z = s->balloon.z;
     int rings = Terrain_RingCount();
-    int primed = 0;
-    for (int level = 0; level < rings; level++) {
-        if (s->clip[level].ready) primed = 1;
-    }
-    int budget = primed ? 1 : rings;
-    int built = 0;
-    for (int level = 0; level < CLIP_LEVELS; level++) {
+
+    for (int level = rings; level < CLIP_LEVELS; level++) {
         ClipSlot* slot = &s->clip[level];
-        if (level >= rings) {
-            if (slot->ready) {
-                UnloadMesh(slot->mesh);
-                slot->ready = 0;
-            }
-            continue;
+        if (slot->ready) {
+            UnloadMesh(slot->mesh);
+            slot->ready = 0;
         }
+        if (slot->pendingReady) {
+            UnloadMesh(slot->pending);
+            slot->pendingReady = 0;
+        }
+    }
+
+    int primed = 0;
+    int dirty = 0;
+    for (int level = 0; level < rings; level++) {
         ClipJob job;
         Clip_Describe(level, x, z, &job);
-        if (slot->ready && SameJob(&slot->job, &job)) continue;
-        /* After the first fill, one ring a frame. Rebuilding every ring
-         * on the same cell boundary stalled the picture and the audio. */
-        if (built >= budget) continue;
-        Mesh mesh;
-        if (!Clip_Build(&job, &mesh)) continue;
-        if (slot->ready) UnloadMesh(slot->mesh);
-        slot->mesh = mesh;
-        slot->ready = 1;
-        slot->job = job;
-        built++;
+        if (s->clip[level].ready) primed = 1;
+        if (!s->clip[level].ready || !SameJob(&s->clip[level].job, &job)) dirty = 1;
+        if (!s->clipSnap) s->clipTarget[level] = job;
     }
+
+    /* The first fill is shown at once. Later, rings are built one per
+     * frame and swapped together: showing a new ring next to an old one
+     * draws a bright seam that races out to the horizon. */
+    if (!primed) {
+        for (int level = 0; level < rings; level++) {
+            ClipSlot* slot = &s->clip[level];
+            Mesh mesh;
+            if (!Clip_Build(&s->clipTarget[level], &mesh)) continue;
+            slot->mesh = mesh;
+            slot->job = s->clipTarget[level];
+            slot->ready = 1;
+        }
+        s->clipSnap = 0;
+    } else if (dirty || s->clipSnap) {
+        if (!s->clipSnap) s->clipSnap = 1;
+        int pending = 0;
+        int built = 0;
+        for (int level = 0; level < rings; level++) {
+            ClipSlot* slot = &s->clip[level];
+            if (slot->pendingReady) {
+                pending++;
+                continue;
+            }
+            if (built) continue;
+            Mesh mesh;
+            if (!Clip_Build(&s->clipTarget[level], &mesh)) continue;
+            slot->pending = mesh;
+            slot->pendingReady = 1;
+            built = 1;
+            pending++;
+        }
+        if (pending >= rings) {
+            for (int level = 0; level < rings; level++) {
+                ClipSlot* slot = &s->clip[level];
+                if (slot->ready) UnloadMesh(slot->mesh);
+                slot->mesh = slot->pending;
+                slot->job = s->clipTarget[level];
+                slot->ready = 1;
+                slot->pendingReady = 0;
+            }
+            s->clipSnap = 0;
+        }
+    }
+
     float snap = 32.0f;
     float px = floorf(x / snap) * snap;
     float pz = floorf(z / snap) * snap;
