@@ -3,21 +3,22 @@
 #ifndef BALLOON_WORLD_H
 #define BALLOON_WORLD_H
 
-/* Interior half-extents of the wicker basket, in metres. */
-#define BASKET_HALF_X 0.60f
-#define BASKET_HALF_Z 0.50f
+/* Interior of the wicker, in metres. Wide enough to turn around,
+ * and the frame above clears a 2.10 m passenger. */
+#define BASKET_HALF_X 0.82f
+#define BASKET_HALF_Z 0.68f
 #define BASKET_RIM_Y 1.12f
 
-/* Overhead frame the handles hang from. Reachable from a standing pose. */
-#define FRAME_Y 2.16f
+/* Beam centre. The 5 cm timber leaves about 2.50 m under it. */
+#define FRAME_Y 2.55f
 
 /* Handles hang from the middle of the frame, so either one can be reached
  * from anywhere in the basket, facing any way. Red is left, green is right. */
 #define HANDLE_RED_X (-0.18f)
 #define HANDLE_GREEN_X 0.18f
 #define HANDLE_Z (-0.16f)
-#define HANDLE_REST_Y 1.74f
-#define HANDLE_ANCHOR_Y 2.14f
+#define HANDLE_REST_Y 2.02f
+#define HANDLE_ANCHOR_Y 2.46f
 #define HANDLE_MAX_PULL 0.46f
 
 /* Pull past ON to light the burner / open the vent. Drop below OFF to stop.

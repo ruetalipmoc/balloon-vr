@@ -723,7 +723,7 @@ void Scene_Update(Scene* s, const HandInput hands[2], float dt, int keyBurner, i
         float ang = (float)(rand() % 628) / 100.0f;
         float rad = 0.03f + (float)(rand() % 40) / 1000.0f;
         float side = (rand() & 1) ? -0.055f : 0.055f;
-        Vector3 p = { side + cosf(ang) * rad, 2.68f, sinf(ang) * rad };
+        Vector3 p = { side + cosf(ang) * rad, FRAME_Y + 0.52f, sinf(ang) * rad };
         Vector3 v = { (float)(rand() % 10 - 5) / 50.0f, 3.0f + s->flame * 2.4f, (float)(rand() % 10 - 5) / 50.0f };
         SpawnParticle(s, 0, p, v, 0.45f + s->flame * 0.25f);
     }
@@ -1003,7 +1003,7 @@ static void DrawGuardRail(void)
         Vector3 a = corner[s];
         Vector3 b = corner[(s + 1) & 3];
         /* Long sides (along X) get one more bay than the short sides. */
-        int bays = (s & 1) ? 3 : 4;
+        int bays = (s & 1) ? 4 : 5;
         Vector3 dir = { b.x - a.x, 0.0f, b.z - a.z };
         float len = sqrtf(dir.x * dir.x + dir.z * dir.z);
         if (len < 1.0e-4f) continue;
@@ -1050,7 +1050,7 @@ static void DrawGuardRail(void)
  * Pulling the ceiling handle drags this lever down. */
 static Vector3 BurnerValveTip(float pull01)
 {
-    Vector3 pivot = { -0.05f, 2.28f, -0.20f };
+    Vector3 pivot = { -0.05f, FRAME_Y + 0.12f, -0.20f };
     float ang = Lerpf(0.55f, 2.15f, Clampf(pull01, 0.0f, 1.0f));
     return (Vector3){
         pivot.x - 0.04f,
@@ -1121,9 +1121,9 @@ static void DrawBurner(const Scene* s)
     Color valveRed = { 196, 46, 48, 255 };
 
     const float half = 0.17f;
-    const float yb = 2.36f;
-    const float yt = 2.74f;
-    const float ys = 2.46f;
+    const float yb = FRAME_Y + 0.20f;
+    const float yt = FRAME_Y + 0.58f;
+    const float ys = FRAME_Y + 0.30f;
     const float hx = BASKET_HALF_X;
     const float hz = BASKET_HALF_Z;
 
@@ -1173,19 +1173,19 @@ static void DrawBurner(const Scene* s)
     DrawCube((Vector3){ -half + 0.008f, sky, 0 }, 0.012f, skh, span, skirtCol);
     DrawCube((Vector3){  half - 0.008f, sky, 0 }, 0.012f, skh, span, skirtCol);
 
-    DrawCylinder((Vector3){ 0.0f, 2.18f, 0.0f }, 0.05f, 0.07f, 0.16f, 8, steelDark);
-    DrawCylinder((Vector3){ 0.0f, 2.32f, 0.0f }, 0.09f, 0.05f, 0.04f, 8, steel);
-    DrawCylinderEx((Vector3){ -0.16f, 2.34f, 0 }, (Vector3){ 0.16f, 2.34f, 0 }, 0.016f, 0.016f, 6, steelDark);
+    DrawCylinder((Vector3){ 0.0f, FRAME_Y + 0.02f, 0.0f }, 0.05f, 0.07f, 0.16f, 8, steelDark);
+    DrawCylinder((Vector3){ 0.0f, FRAME_Y + 0.16f, 0.0f }, 0.09f, 0.05f, 0.04f, 8, steel);
+    DrawCylinderEx((Vector3){ -0.16f, FRAME_Y + 0.18f, 0 }, (Vector3){ 0.16f, FRAME_Y + 0.18f, 0 }, 0.016f, 0.016f, 6, steelDark);
 
     float pull = s->handles.h[HANDLE_BURNER].pull / HANDLE_MAX_PULL;
-    Vector3 pivot = { -0.05f, 2.28f, -0.20f };
+    Vector3 pivot = { -0.05f, FRAME_Y + 0.12f, -0.20f };
     Vector3 tip = BurnerValveTip(pull);
     DrawSphere(pivot, 0.022f, brass);
     DrawCylinderEx(pivot, tip, 0.013f, 0.008f, 5, valveRed);
     DrawSphere(tip, 0.016f, valveRed);
 
-    DrawRope((Vector3){ -0.16f, 2.34f, 0.0f }, (Vector3){ -hx + 0.06f, FRAME_Y, -0.06f }, 0.12f, 0.010f, hose);
-    DrawRope((Vector3){  0.16f, 2.34f, 0.0f }, (Vector3){  hx - 0.06f, FRAME_Y, -0.06f }, 0.12f, 0.010f, hose);
+    DrawRope((Vector3){ -0.16f, FRAME_Y + 0.18f, 0.0f }, (Vector3){ -hx + 0.06f, FRAME_Y, -0.06f }, 0.12f, 0.010f, hose);
+    DrawRope((Vector3){  0.16f, FRAME_Y + 0.18f, 0.0f }, (Vector3){  hx - 0.06f, FRAME_Y, -0.06f }, 0.12f, 0.010f, hose);
 
     Color coil = copper;
     if (s->flame > 0.15f) {
@@ -1193,15 +1193,15 @@ static void DrawBurner(const Scene* s)
         coil.g = (unsigned char)Lerpf((float)copper.g, 150.0f, s->flame);
         coil.b = (unsigned char)Lerpf((float)copper.b, 70.0f, s->flame);
     }
-    DrawCoil(-0.055f, 0.0f, 2.44f, 2.64f, 0.046f, 3, coil);
-    DrawCoil( 0.055f, 0.0f, 2.44f, 2.64f, 0.046f, 3, coil);
+    DrawCoil(-0.055f, 0.0f, FRAME_Y + 0.28f, FRAME_Y + 0.48f, 0.046f, 3, coil);
+    DrawCoil( 0.055f, 0.0f, FRAME_Y + 0.28f, FRAME_Y + 0.48f, 0.046f, 3, coil);
 
     Vector3 jets[8];
     for (int side = 0; side < 2; side++) {
         float cx = side ? 0.055f : -0.055f;
         for (int k = 0; k < 4; k++) {
             float a = ((float)k + 0.5f) / 4.0f * 2.0f * (float)M_PI;
-            Vector3 base = { cx + cosf(a) * 0.028f, 2.64f, sinf(a) * 0.028f };
+            Vector3 base = { cx + cosf(a) * 0.028f, FRAME_Y + 0.48f, sinf(a) * 0.028f };
             DrawCylinder(base, 0.014f, 0.018f, 0.04f, 5, steelDark);
             jets[side * 4 + k] = (Vector3){ base.x, base.y + 0.04f, base.z };
         }
