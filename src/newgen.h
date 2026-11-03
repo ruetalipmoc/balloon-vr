@@ -13,6 +13,7 @@ float NewGen_Height(float x, float z);
 float NewGen_FarPlane(void);
 void NewGen_Update(float x, float z);
 void NewGen_Draw(float eyeX, float eyeZ);
+void NewGen_SetFog(int on);
 void NewGen_Shutdown(void);
 
 #endif

@@ -30,6 +30,8 @@ static int g_haveCenter = 0;
 
 static Shader g_shader;
 static int g_locEye = -1;
+static int g_locFog = -1;
+static int g_fog = 1;
 static Material g_mat;
 
 typedef struct Sheet {
@@ -127,6 +129,7 @@ static const char* FS_330 =
     "in vec3 vWorld;\n"
     "out vec4 finalColor;\n"
     "uniform vec2 uEye;\n"
+    "uniform float uFog;\n"
     "uniform vec4 colDiffuse;\n"
     "void main() {\n"
     "    float h = vWorld.y;\n"
@@ -142,7 +145,11 @@ static const char* FS_330 =
     "    c = mix(c, snow, smoothstep(52.0, 66.0, h));\n"
     "    c = mix(water, c, smoothstep(4.2, 6.6, h));\n"
     "    float dist = length(vWorld.xz - uEye);\n"
-    "    c = mix(c, vec3(0.76, 0.82, 0.86), smoothstep(5000.0, 14000.0, dist));\n"
+    "    float edge = min(min(vWorld.x + 6144.0, 6144.0 - vWorld.x),\n"
+    "                     min(vWorld.z + 6144.0, 6144.0 - vWorld.z));\n"
+    "    float fog = smoothstep(2400.0, 5600.0, dist);\n"
+    "    fog = max(fog, 1.0 - smoothstep(160.0, 1500.0, edge));\n"
+    "    c = mix(c, vec3(0.910, 0.824, 0.706), clamp(fog, 0.0, 1.0) * uFog);\n"
     "    finalColor = vec4(c, 1.0) * colDiffuse;\n"
     "}\n";
 
@@ -165,6 +172,7 @@ static const char* FS_100 =
     "precision highp float;\n"
     "varying vec3 vWorld;\n"
     "uniform vec2 uEye;\n"
+    "uniform float uFog;\n"
     "uniform vec4 colDiffuse;\n"
     "void main() {\n"
     "    float h = vWorld.y;\n"
@@ -180,7 +188,11 @@ static const char* FS_100 =
     "    c = mix(c, snow, smoothstep(52.0, 66.0, h));\n"
     "    c = mix(water, c, smoothstep(4.2, 6.6, h));\n"
     "    float dist = length(vWorld.xz - uEye);\n"
-    "    c = mix(c, vec3(0.76, 0.82, 0.86), smoothstep(5000.0, 14000.0, dist));\n"
+    "    float edge = min(min(vWorld.x + 6144.0, 6144.0 - vWorld.x),\n"
+    "                     min(vWorld.z + 6144.0, 6144.0 - vWorld.z));\n"
+    "    float fog = smoothstep(2400.0, 5600.0, dist);\n"
+    "    fog = max(fog, 1.0 - smoothstep(160.0, 1500.0, edge));\n"
+    "    c = mix(c, vec3(0.910, 0.824, 0.706), clamp(fog, 0.0, 1.0) * uFog);\n"
     "    gl_FragColor = vec4(c, 1.0) * colDiffuse;\n"
     "}\n";
 
@@ -445,8 +457,19 @@ void NewGen_Begin(unsigned int seed)
     g_ownShader = (g_shader.id != 0);
     if (g_ownShader) g_mat.shader = g_shader;
     g_locEye = GetShaderLocation(g_shader, "uEye");
+    g_locFog = GetShaderLocation(g_shader, "uFog");
+    NewGen_SetFog(1);
     printf("newgen seed %u   sheet %.1f km at %.0f m   tiles %.0f m\n",
            seed, NG_MAP / 1000.0f, NG_SPACE, NG_TILE);
+}
+
+void NewGen_SetFog(int on)
+{
+    g_fog = on ? 1 : 0;
+    if (g_locFog >= 0) {
+        float v = g_fog ? 1.0f : 0.0f;
+        SetShaderValue(g_shader, g_locFog, &v, SHADER_UNIFORM_FLOAT);
+    }
 }
 
 void NewGen_Update(float x, float z)

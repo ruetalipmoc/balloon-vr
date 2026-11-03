@@ -289,7 +289,7 @@ static void PrintUsage(void)
 {
     printf("balloon-vr [--desktop] [--view METRES] [--lod RINGS] [--newgen] [--seed N]\n");
     printf("  Headset: pull the red ceiling handle to burn, the green one to vent.\n");
-    printf("  Desktop: mouse look, F/left mouse burns, G/right mouse vents.\n");
+    printf("  Desktop: mouse look, F/left mouse burns, G/right mouse vents, M toggles haze.\n");
     printf("  --view   Radius of the finest ring at %.0f m above the ground\n", TERRAIN_ALT_REF);
     printf("           (default %.0f, range %.0f..%.0f). It grows as you climb\n",
            TERRAIN_VIEW_DEFAULT, TERRAIN_VIEW_MIN, TERRAIN_VIEW_MAX);
@@ -412,6 +412,12 @@ int main(int argc, char** argv)
             g_pitch = 0.22f;
         }
         if (IsKeyPressed(KEY_P)) g_paused = !g_paused;
+        if (IsKeyPressed(KEY_M)) {
+            static int haze = 1;
+            haze = !haze;
+            NewGen_SetFog(haze);
+            printf("haze %s\n", haze ? "on" : "off");
+        }
         int shotRequest = IsKeyPressed(KEY_S);
 
         if (xr) {
