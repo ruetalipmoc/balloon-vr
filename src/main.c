@@ -189,7 +189,7 @@ static void SaveScreenshot(void)
 {
     static int serial = 0;
     char name[64];
-    snprintf(name, sizeof(name), "balloon-%04d.png", ++serial);
+    snprintf(name, sizeof(name), "/tmp/balloon-%04d.png", ++serial);
     Image img = LoadImageFromScreen();
     int ok = ExportImage(img, name);
     if (ok) printf("screenshot %s (%dx%d)\n", name, img.width, img.height);
@@ -204,7 +204,7 @@ static void SaveScreenshot(void)
                 var url = URL.createObjectURL(blob);
                 var a = document.createElement("a");
                 a.href = url;
-                a.download = name;
+                a.download = name.replace(/^.*\//, "");
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);

@@ -44,7 +44,7 @@ If no OpenXR runtime is running, the same simulation opens in a window.
 | Thumbstick click on the menu page, or `Enter` | Reset the view (also `R`) |
 | `Esc` | Quit |
 | `P` | Pause / resume the flight (look and the watch still work) |
-| `S` | Save a screenshot of the window (`balloon-0001.png`, …) |
+| `S` | Save a screenshot of the window (`/tmp/balloon-0001.png`, …) |
 
 `./balloon-vr --desktop` skips OpenXR entirely.
 
