@@ -445,66 +445,6 @@ int FarField_Build(float viewX, float viewZ,
  * and each coarser ring doubles both the spacing and the reach. */
 #define CLIP_HALF 32
 
-static Color LerpCover(Color a, Color b, float t)
-{
-    Color c = LerpColor(a, b, t);
-    c.a = (unsigned char)((float)a.a + ((float)b.a - (float)a.a) * t + 0.5f);
-    return c;
-}
-
-typedef struct Shade {
-    float y, nx, ny, nz;
-    Color cover;
-} Shade;
-
-static Shade ShadeAt(float x, float z)
-{
-    Shade s;
-    s.y = Terrain_Height(x, z);
-    Terrain_Normal(x, z, &s.nx, &s.ny, &s.nz);
-    s.cover = CoverColor(x, z);
-    return s;
-}
-
-static Shade LerpShade(Shade a, Shade b, float t)
-{
-    Shade s;
-    s.y = a.y + (b.y - a.y) * t;
-    s.nx = a.nx + (b.nx - a.nx) * t;
-    s.ny = a.ny + (b.ny - a.ny) * t;
-    s.nz = a.nz + (b.nz - a.nz) * t;
-    s.cover = LerpCover(a.cover, b.cover, t);
-    float len = sqrtf(s.nx * s.nx + s.ny * s.ny + s.nz * s.nz);
-    if (len < 1.0e-5f) {
-        s.nx = 0.0f;
-        s.ny = 1.0f;
-        s.nz = 0.0f;
-    } else {
-        s.nx /= len;
-        s.ny /= len;
-        s.nz /= len;
-    }
-    return s;
-}
-
-/* Height of the coarser lattice, so a fully morphed edge lies on that ring. */
-static Shade ShadeCoarse(float x, float z, float spacing)
-{
-    float x0 = floorf(x / spacing) * spacing;
-    float z0 = floorf(z / spacing) * spacing;
-    float tx = (x - x0) / spacing;
-    float tz = (z - z0) / spacing;
-    if (tx < 0.0f) tx = 0.0f;
-    if (tx > 1.0f) tx = 1.0f;
-    if (tz < 0.0f) tz = 0.0f;
-    if (tz > 1.0f) tz = 1.0f;
-    Shade s00 = ShadeAt(x0, z0);
-    Shade s10 = ShadeAt(x0 + spacing, z0);
-    Shade s01 = ShadeAt(x0, z0 + spacing);
-    Shade s11 = ShadeAt(x0 + spacing, z0 + spacing);
-    return LerpShade(LerpShade(s00, s10, tx), LerpShade(s01, s11, tz), tz);
-}
-
 static float MorphAlpha(float x, float z, float L, float R, float B, float T)
 {
     float dx = x - L;
@@ -521,15 +461,6 @@ static float MorphAlpha(float x, float z, float L, float R, float B, float T)
     if (a < 0.0f) a = 0.0f;
     if (a > 1.0f) a = 1.0f;
     return a;
-}
-
-static Shade ShadeMorph(float x, float z, const ClipJob* job)
-{
-    Shade fine = ShadeAt(x, z);
-    if (!job->morph) return fine;
-    float a = MorphAlpha(x, z, job->boundL, job->boundR, job->boundB, job->boundT);
-    if (a <= 0.001f) return fine;
-    return LerpShade(fine, ShadeCoarse(x, z, job->spacing * 2.0f), a);
 }
 
 void Clip_Describe(int level, float viewX, float viewZ, ClipJob* job)
@@ -576,36 +507,75 @@ static int QuadInside(float x, float z, float s, float L, float R, float B, floa
     return x >= L - 0.05f && x + s <= R + 0.05f && z >= B - 0.05f && z + s <= T + 0.05f;
 }
 
-static void PushQuad(float* v, float* n, unsigned char* c, float* uv, int* i,
-                      float x, float z, float s, Shade s00, Shade s10, Shade s11, Shade s01)
+static void GridNormal(const float* h, int stride, int i, int j, int n, int m, float step,
+                       float* nx, float* ny, float* nz)
 {
-    float xs[4] = { x, x + s, x + s, x };
-    float zs[4] = { z, z, z + s, z + s };
-    Shade sh[4] = { s00, s10, s11, s01 };
-    int tris[2][3] = { { 0, 2, 1 }, { 0, 3, 2 } };
-    for (int t = 0; t < 2; t++) {
-        for (int k = 0; k < 3; k++) {
-            int id = tris[t][k];
-            PushVert(v, n, c, uv, *i, xs[id], sh[id].y, zs[id],
-                     sh[id].nx, sh[id].ny, sh[id].nz, sh[id].cover);
-            (*i)++;
-        }
-    }
+    float hl = h[j * stride + (i > 0 ? i - 1 : i)];
+    float hr = h[j * stride + (i < n ? i + 1 : i)];
+    float hd = h[(j > 0 ? j - 1 : j) * stride + i];
+    float hu = h[(j < m ? j + 1 : j) * stride + i];
+    float sx = (i > 0 && i < n) ? 2.0f * step : step;
+    float sz = (j > 0 && j < m) ? 2.0f * step : step;
+    float dhx = (hl - hr) / sx;
+    float dhz = (hd - hu) / sz;
+    float len = sqrtf(dhx * dhx + 1.0f + dhz * dhz);
+    *nx = dhx / len;
+    *ny = 1.0f / len;
+    *nz = dhz / len;
 }
 
 int Clip_Build(const ClipJob* job, Mesh* out)
 {
     float s = job->spacing;
-    float half = job->radius;
-    int n = CLIP_HALF * 2;
-    int mainQuads = n * n;
-    int trimQuads = job->morph ? (8 * n + 64) : 0;
-    int maxVerts = (mainQuads + trimQuads) * 6;
+    float x0, z0, x1, z1;
+    if (job->morph) {
+        x0 = job->boundL;
+        z0 = job->boundB;
+        x1 = job->boundR;
+        z1 = job->boundT;
+    } else {
+        x0 = job->cx - job->radius;
+        z0 = job->cz - job->radius;
+        x1 = job->cx + job->radius;
+        z1 = job->cz + job->radius;
+    }
+    int n = (int)floorf((x1 - x0) / s + 0.5f);
+    int m = (int)floorf((z1 - z0) / s + 0.5f);
+    if (n < 2) n = 2;
+    if (m < 2) m = 2;
+    int stride = n + 1;
+    int count = stride * (m + 1);
+    float* h = (float*)MemAlloc((unsigned int)count * sizeof(float));
+    Color* col = (Color*)MemAlloc((unsigned int)count * sizeof(Color));
+    if (!h || !col) {
+        MemFree(h);
+        MemFree(col);
+        return 0;
+    }
+    for (int j = 0; j <= m; j++) {
+        float z = z0 + (float)j * s;
+        for (int i = 0; i <= n; i++) {
+            float x = x0 + (float)i * s;
+            float y, city, farm, forest, highland;
+            Terrain_HeightCover(x, z, &y, &city, &farm, &forest, &highland);
+            h[j * stride + i] = y;
+            col[j * stride + i] = (Color){
+                (unsigned char)(Clampf(city, 0.0f, 1.0f) * 255.0f + 0.5f),
+                (unsigned char)(Clampf(farm, 0.0f, 1.0f) * 255.0f + 0.5f),
+                (unsigned char)(Clampf(forest, 0.0f, 1.0f) * 255.0f + 0.5f),
+                (unsigned char)(Clampf(highland, 0.0f, 1.0f) * 255.0f + 0.5f)
+            };
+        }
+    }
+
+    int maxVerts = n * m * 6;
     float* gv = (float*)MemAlloc((unsigned int)maxVerts * 3 * sizeof(float));
     float* gn = (float*)MemAlloc((unsigned int)maxVerts * 3 * sizeof(float));
     unsigned char* gc = (unsigned char*)MemAlloc((unsigned int)maxVerts * 4);
     float* gu = (float*)MemAlloc((unsigned int)maxVerts * 2 * sizeof(float));
     if (!gv || !gn || !gc || !gu) {
+        MemFree(h);
+        MemFree(col);
         MemFree(gv);
         MemFree(gn);
         MemFree(gc);
@@ -614,44 +584,69 @@ int Clip_Build(const ClipJob* job, Mesh* out)
     }
 
     int gi = 0;
-    float x0 = job->cx - half;
-    float z0 = job->cz - half;
-    for (int j = 0; j < n; j++) {
+    int tris[2][3] = { { 0, 2, 1 }, { 0, 3, 2 } };
+    for (int j = 0; j < m; j++) {
         float z = z0 + (float)j * s;
         for (int i = 0; i < n; i++) {
             float x = x0 + (float)i * s;
             if (job->hasHole && QuadInside(x, z, s, job->holeL, job->holeR, job->holeB, job->holeT))
                 continue;
-            if (gi + 6 > maxVerts) break;
-            Shade s00 = ShadeMorph(x, z, job);
-            Shade s10 = ShadeMorph(x + s, z, job);
-            Shade s11 = ShadeMorph(x + s, z + s, job);
-            Shade s01 = ShadeMorph(x, z + s, job);
-            PushQuad(gv, gn, gc, gu, &gi, x, z, s, s00, s10, s11, s01);
-        }
-    }
-
-    /* The ring is snapped to its own grid, so it does not share a centre
-     * with the finer ring. The gap, at most one coarse cell wide, is filled
-     * here and fully morphed onto the coarser surface. */
-    if (job->morph) {
-        int nx = (int)floorf((job->boundR - job->boundL) / s + 0.5f);
-        int nz = (int)floorf((job->boundT - job->boundB) / s + 0.5f);
-        for (int j = 0; j < nz; j++) {
-            float z = job->boundB + (float)j * s;
-            for (int i = 0; i < nx; i++) {
-                float x = job->boundL + (float)i * s;
-                if (QuadInside(x, z, s, x0, x0 + half * 2.0f, z0, z0 + half * 2.0f)) continue;
-                if (gi + 6 > maxVerts) break;
-                Shade s00 = ShadeMorph(x, z, job);
-                Shade s10 = ShadeMorph(x + s, z, job);
-                Shade s11 = ShadeMorph(x + s, z + s, job);
-                Shade s01 = ShadeMorph(x, z + s, job);
-                PushQuad(gv, gn, gc, gu, &gi, x, z, s, s00, s10, s11, s01);
+            int id[4][2] = { { i, j }, { i + 1, j }, { i + 1, j + 1 }, { i, j + 1 } };
+            float px[4], py[4], pz[4], pnx[4], pny[4], pnz[4];
+            Color pc[4];
+            for (int k = 0; k < 4; k++) {
+                int ii = id[k][0];
+                int jj = id[k][1];
+                float wx = x0 + (float)ii * s;
+                float wz = z0 + (float)jj * s;
+                float wy = h[jj * stride + ii];
+                float nx, ny, nz;
+                GridNormal(h, stride, ii, jj, n, m, s, &nx, &ny, &nz);
+                Color c = col[jj * stride + ii];
+                if (job->morph) {
+                    float a = MorphAlpha(wx, wz, job->boundL, job->boundR, job->boundB, job->boundT);
+                    int ci = ii & ~1;
+                    int cj = jj & ~1;
+                    if (a > 0.0f && (ci != ii || cj != jj)) {
+                        float hy = h[cj * stride + ci];
+                        wx = wx + ((x0 + (float)ci * s) - wx) * a;
+                        wz = wz + ((z0 + (float)cj * s) - wz) * a;
+                        wy = wy + (hy - wy) * a;
+                        float cnx, cny, cnz;
+                        GridNormal(h, stride, ci, cj, n, m, s, &cnx, &cny, &cnz);
+                        nx = nx + (cnx - nx) * a;
+                        ny = ny + (cny - ny) * a;
+                        nz = nz + (cnz - nz) * a;
+                        c = LerpColor(c, col[cj * stride + ci], a);
+                        c.a = (unsigned char)((float)col[jj * stride + ii].a
+                            + ((float)col[cj * stride + ci].a - (float)col[jj * stride + ii].a) * a + 0.5f);
+                        float len = sqrtf(nx * nx + ny * ny + nz * nz);
+                        if (len > 1.0e-5f) {
+                            nx /= len;
+                            ny /= len;
+                            nz /= len;
+                        }
+                    }
+                }
+                px[k] = wx;
+                py[k] = wy;
+                pz[k] = wz;
+                pnx[k] = nx;
+                pny[k] = ny;
+                pnz[k] = nz;
+                pc[k] = c;
+            }
+            for (int t = 0; t < 2; t++) {
+                for (int k = 0; k < 3; k++) {
+                    int q = tris[t][k];
+                    PushVert(gv, gn, gc, gu, gi, px[q], py[q], pz[q], pnx[q], pny[q], pnz[q], pc[q]);
+                    gi++;
+                }
             }
         }
     }
-
+    MemFree(h);
+    MemFree(col);
     if (gi < 3) {
         MemFree(gv);
         MemFree(gn);

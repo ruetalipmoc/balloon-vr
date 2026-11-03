@@ -558,11 +558,19 @@ static void UpdateClip(Scene* s)
     Terrain_ApplyAltitude(agl);
     float x = s->balloon.x;
     float z = s->balloon.z;
+    int anyReady = 0;
+    for (int level = 0; level < CLIP_LEVELS; level++) {
+        if (s->clip[level].ready) anyReady = 1;
+    }
+    int built = 0;
     for (int level = 0; level < CLIP_LEVELS; level++) {
         ClipJob job;
         Clip_Describe(level, x, z, &job);
         ClipSlot* slot = &s->clip[level];
         if (slot->ready && SameJob(&slot->job, &job)) continue;
+        /* The first frame fills every ring. Afterwards only one ring is
+         * rebuilt per frame, so crossing several grid lines does not stall. */
+        if (anyReady && built >= 1) continue;
         if (slot->ready) {
             UnloadMesh(slot->mesh);
             slot->ready = 0;
@@ -570,6 +578,7 @@ static void UpdateClip(Scene* s)
         if (Clip_Build(&job, &slot->mesh)) {
             slot->ready = 1;
             slot->job = job;
+            built++;
         }
     }
     float snap = 32.0f;

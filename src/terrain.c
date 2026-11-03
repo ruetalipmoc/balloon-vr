@@ -154,6 +154,16 @@ void Terrain_Cover(float x, float z, float* city, float* farm, float* forest, fl
     *highland = land.highland;
 }
 
+void Terrain_HeightCover(float x, float z, float* height, float* city, float* farm, float* forest, float* highland)
+{
+    Land land = LandAt(x, z);
+    *height = land.height;
+    *city = land.city;
+    *farm = land.farm;
+    *forest = land.forest;
+    *highland = land.highland;
+}
+
 float Terrain_Moisture(float x, float z)
 {
     return Fbm(x + 90.0f, z - 40.0f, 0.0024f, 1.0f, 4);
