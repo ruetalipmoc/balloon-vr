@@ -44,7 +44,9 @@ EM_JS(void, Balloon_ExposeControls, (), {
 #endif
 
 static int g_yawCaptured = 0;
+#ifndef __EMSCRIPTEN__
 static int g_mouseBurnArmed = 0;
+#endif
 static float g_yaw = 0.0f;
 static float g_pitch = 0.22f;
 
