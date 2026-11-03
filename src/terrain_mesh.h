@@ -13,6 +13,7 @@ typedef struct Prop {
     float x, y, z;
     float yaw;
     float scale;
+    float fade; /* 1 near the basket, 0 where the prop dissolves into the ground colour */
     int kind; /* 0 broadleaf, 1 pine, 2 rock, 3 house, 4 barn, 5 block, 6 tower */
 } Prop;
 

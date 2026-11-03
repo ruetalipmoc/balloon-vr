@@ -89,47 +89,207 @@ static void MasksAt(float x, float z, float* city, float* farm, float* forest, f
     *highland = hi;
 }
 
-/* One evaluation of every mask. Height, zone and colour all share it so a
- * river cannot drift off the blue bed, and a town cannot sit on a ridge. */
+/* Drainage on a fixed grid. A vertex belongs to one tile, and its carved
+ * height is a function of the base relief only, so the tile that stores it
+ * and the tile next door agree on the shared edge. Rivers are the cells
+ * that collect the most uphill rain. A hollow with nowhere to go is a lake. */
+#define DRAIN_CELL 64.0f
+#define DRAIN_N 4
+#define DRAIN_MARGIN 12
+#define DRAIN_WIN (DRAIN_N + 2 * DRAIN_MARGIN)
+#define DRAIN_CACHE 4096
+
+typedef struct DrainTile {
+    int tx, tz;
+    int live;
+    float h[DRAIN_N * DRAIN_N];
+    unsigned char wet[DRAIN_N * DRAIN_N];
+} DrainTile;
+
+static DrainTile g_drain[DRAIN_CACHE];
+static float g_focusX = 0.0f;
+static float g_focusZ = 0.0f;
+
+static int DivFloor(int a, int b)
+{
+    int q = a / b;
+    int r = a % b;
+    if (r != 0 && ((a < 0 && b > 0) || (a > 0 && b < 0))) q--;
+    return q;
+}
+
+static float BaseRelief(int ix, int iz)
+{
+    float x = (float)ix * DRAIN_CELL;
+    float z = (float)iz * DRAIN_CELL;
+    float macro = Fbm(x, z, 0.00115f, 1.0f, 3);
+    float detail = Fbm(x + 80.0f, z - 40.0f, 0.0048f, 1.0f, 2);
+    float ridgeN = Fbm(x + 520.0f, z - 280.0f, 0.0024f, 1.0f, 2);
+    float ridge = 1.0f - fabsf(ridgeN * 2.0f - 1.0f);
+    return 9.0f + macro * 38.0f + (detail - 0.5f) * 12.0f + ridge * ridge * 16.0f;
+}
+
+static void GenerateTile(DrainTile* tile, int tx, int tz)
+{
+    const int win = DRAIN_WIN;
+    const int orgX = tx * DRAIN_N - DRAIN_MARGIN;
+    const int orgZ = tz * DRAIN_N - DRAIN_MARGIN;
+    static float base[DRAIN_WIN * DRAIN_WIN];
+    static float acc[DRAIN_WIN * DRAIN_WIN];
+    static float nxt[DRAIN_WIN * DRAIN_WIN];
+    static signed char down[DRAIN_WIN * DRAIN_WIN];
+    static const int DX[8] = { 1, -1, 0, 0, 1, 1, -1, -1 };
+    static const int DZ[8] = { 0, 0, 1, -1, 1, -1, 1, -1 };
+
+    for (int j = 0; j < win; j++) {
+        for (int i = 0; i < win; i++)
+            base[j * win + i] = BaseRelief(orgX + i, orgZ + j);
+    }
+    for (int j = 0; j < win; j++) {
+        for (int i = 0; i < win; i++) {
+            int id = j * win + i;
+            float h = base[id];
+            int best = -1;
+            float bestH = h - 0.05f;
+            for (int k = 0; k < 8; k++) {
+                int ni = i + DX[k];
+                int nj = j + DZ[k];
+                if (ni < 0 || nj < 0 || ni >= win || nj >= win) continue;
+                float hn = base[nj * win + ni];
+                if (hn < bestH) {
+                    bestH = hn;
+                    best = k;
+                }
+            }
+            down[id] = (signed char)best;
+            acc[id] = 1.0f;
+        }
+    }
+    for (int step = 0; step < DRAIN_MARGIN; step++) {
+        for (int i = 0; i < win * win; i++) nxt[i] = 1.0f;
+        for (int j = 0; j < win; j++) {
+            for (int i = 0; i < win; i++) {
+                int id = j * win + i;
+                int dir = down[id];
+                if (dir < 0) continue;
+                int ni = i + DX[dir];
+                int nj = j + DZ[dir];
+                if (ni < 0 || nj < 0 || ni >= win || nj >= win) continue;
+                nxt[nj * win + ni] += acc[id];
+            }
+        }
+        memcpy(acc, nxt, sizeof(acc));
+    }
+
+    tile->tx = tx;
+    tile->tz = tz;
+    tile->live = 1;
+    for (int j = 0; j < DRAIN_N; j++) {
+        for (int i = 0; i < DRAIN_N; i++) {
+            int id = (j + DRAIN_MARGIN) * win + (i + DRAIN_MARGIN);
+            float b = base[id];
+            float a = acc[id];
+            int dir = down[id];
+            float nab = a;
+            for (int k = 0; k < 8; k++) {
+                int ni = i + DRAIN_MARGIN + DX[k];
+                int nj = j + DRAIN_MARGIN + DZ[k];
+                if (ni < 0 || nj < 0 || ni >= win || nj >= win) continue;
+                float an = acc[nj * win + ni];
+                if (an > nab) nab = an;
+            }
+            float x = (float)(tx * DRAIN_N + i) * DRAIN_CELL;
+            float z = (float)(tz * DRAIN_N + j) * DRAIN_CELL;
+            float city, farm, forest, highland;
+            MasksAt(x, z, &city, &farm, &forest, &highland);
+            float h = b;
+            float wet = 0.0f;
+            int lake = (dir < 0 && b < 34.0f && highland < 0.6f && city < 0.5f && a > 2.0f);
+            int channel = (a > 11.0f || (nab > 18.0f && b < 28.0f));
+            if (lake || (channel && city < 0.5f && highland < 0.72f)) {
+                h = TERRAIN_WATER - (lake ? 1.8f : 0.7f);
+                wet = 1.0f;
+            } else if (a > 6.0f && city < 0.55f) {
+                float steps = logf(a) / 0.693147f;
+                float depth = Clampf((steps - 2.2f) * 1.3f, 0.0f, 4.5f);
+                h = b - depth;
+                wet = Clampf((a - 6.0f) / 12.0f, 0.0f, 0.65f);
+            }
+            if (city > 0.55f) h = Lerpf(h, Maxf(h, 12.0f), city);
+            if (h < 0.0f) h = 0.0f;
+            tile->h[j * DRAIN_N + i] = h;
+            tile->wet[j * DRAIN_N + i] = (unsigned char)(wet * 255.0f + 0.5f);
+        }
+    }
+}
+
+static DrainTile* GetTile(int tx, int tz)
+{
+    unsigned int hash = (unsigned int)tx * 374761393u ^ (unsigned int)tz * 668265263u;
+    int slot = (int)(hash % DRAIN_CACHE);
+    int victim = slot;
+    float worst = -1.0f;
+    for (int n = 0; n < 48; n++) {
+        int i = (slot + n) % DRAIN_CACHE;
+        DrainTile* t = &g_drain[i];
+        if (t->live && t->tx == tx && t->tz == tz) return t;
+        if (!t->live) {
+            GenerateTile(t, tx, tz);
+            return t;
+        }
+        float dx = (float)t->tx * 256.0f - g_focusX;
+        float dz = (float)t->tz * 256.0f - g_focusZ;
+        float d = dx * dx + dz * dz;
+        if (d > worst) {
+            worst = d;
+            victim = i;
+        }
+    }
+    GenerateTile(&g_drain[victim], tx, tz);
+    return &g_drain[victim];
+}
+
+static void VertexDrain(int ix, int iz, float* h, float* wet)
+{
+    int tx = DivFloor(ix, DRAIN_N);
+    int tz = DivFloor(iz, DRAIN_N);
+    int lx = ix - tx * DRAIN_N;
+    int lz = iz - tz * DRAIN_N;
+    DrainTile* t = GetTile(tx, tz);
+    *h = t->h[lz * DRAIN_N + lx];
+    *wet = (float)t->wet[lz * DRAIN_N + lx] / 255.0f;
+}
+
+static void SampleDrain(float x, float z, float* height, float* wet)
+{
+    g_focusX = x;
+    g_focusZ = z;
+    float gx = x / DRAIN_CELL;
+    float gz = z / DRAIN_CELL;
+    int ix = (int)floorf(gx);
+    int iz = (int)floorf(gz);
+    float tx = gx - (float)ix;
+    float tz = gz - (float)iz;
+    float h00, h10, h01, h11, w00, w10, w01, w11;
+    VertexDrain(ix, iz, &h00, &w00);
+    VertexDrain(ix + 1, iz, &h10, &w10);
+    VertexDrain(ix, iz + 1, &h01, &w01);
+    VertexDrain(ix + 1, iz + 1, &h11, &w11);
+    float hx0 = Lerpf(h00, h10, tx);
+    float hx1 = Lerpf(h01, h11, tx);
+    *height = Lerpf(hx0, hx1, tz);
+    float wx0 = Lerpf(w00, w10, tx);
+    float wx1 = Lerpf(w01, w11, tx);
+    *wet = Lerpf(wx0, wx1, tz);
+}
+
 static Land LandAt(float x, float z)
 {
     float city, farm, forest, highland;
     MasksAt(x, z, &city, &farm, &forest, &highland);
-
-    float macro = Fbm(x, z, 0.00115f, 1.0f, 3);
-    float detail = Fbm(x + 80.0f, z - 40.0f, 0.0052f, 1.0f, 3);
-    float ridgeN = Fbm(x + 520.0f, z - 280.0f, 0.0026f, 1.0f, 3);
-    float ridge = 1.0f - fabsf(ridgeN * 2.0f - 1.0f);
-
-    float h = 8.0f + macro * 34.0f + (detail - 0.5f) * 18.0f + ridge * ridge * 20.0f;
-    h += highland * (16.0f + ridge * 28.0f);
-
-    /* Towns and fields follow the broad swell but lose the local bumps,
-     * so the lots read as planted or paved rather than draped on a hill. */
-    float farmPad = 9.0f + macro * 16.0f;
-    float cityPad = 12.0f + macro * 8.0f;
-    h = Lerpf(h, farmPad, farm * 0.9f);
-    h = Lerpf(h, cityPad, city);
-
-    float basin = Fbm(x + 160.0f, z - 240.0f, 0.0024f, 1.0f, 3);
-    float lake = Ramp(basin, 0.70f, 0.80f) * (1.0f - city) * (1.0f - highland * 0.5f);
-    h = Lerpf(h, TERRAIN_WATER - 2.8f, lake);
-
-    /* A warped contour is a meandering valley. The wide term lowers the
-     * banks; the narrow term cuts the bed down to the water. */
-    float warpX = Fbm(x, z, 0.0018f, 1.0f, 2) - 0.5f;
-    float warpZ = Fbm(x + 260.0f, z - 140.0f, 0.0018f, 1.0f, 2) - 0.5f;
-    float rn = Fbm(x + warpX * 220.0f, z + warpZ * 220.0f, 0.0031f, 1.0f, 3);
-    float d = fabsf(rn - 0.5f);
-    float valley = 1.0f - Smooth(d / 0.075f);
-    float channel = 1.0f - Smooth(d / 0.026f);
-    float wetMask = (1.0f - city) * (1.0f - highland * 0.75f);
-    float shelf = TERRAIN_WATER + 3.2f;
-    h = Lerpf(h, Minf(h, shelf), valley * wetMask);
-    h = Lerpf(h, TERRAIN_WATER - 1.1f, channel * wetMask);
-
-    if (h < 0.0f) h = 0.0f;
-
+    float h = 0.0f, wet = 0.0f;
+    SampleDrain(x, z, &h, &wet);
+    (void)wet;
     Land land;
     land.height = h;
     land.city = city;
@@ -173,7 +333,9 @@ void Terrain_HeightCover(float x, float z, float* height, float* city, float* fa
 
 float Terrain_Moisture(float x, float z)
 {
-    return Fbm(x + 90.0f, z - 40.0f, 0.0024f, 1.0f, 4);
+    float h = 0.0f, wet = 0.0f;
+    SampleDrain(x, z, &h, &wet);
+    return Clampf(wet, 0.0f, 1.0f);
 }
 
 void Terrain_Normal(float x, float z, float* nx, float* ny, float* nz)

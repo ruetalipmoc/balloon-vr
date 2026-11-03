@@ -1,5 +1,6 @@
-/* Deterministic height field. The same (x, z) always returns the same ground,
- * so chunks can be dropped and rebuilt as the balloon drifts. */
+/* Deterministic drained height field. Tiles of 256 m share their edges, so a
+ * river that crosses one is the same river on the next. The same (x, z)
+ * always returns the same ground. */
 #ifndef BALLOON_TERRAIN_H
 #define BALLOON_TERRAIN_H
 

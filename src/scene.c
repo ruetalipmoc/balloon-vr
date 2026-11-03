@@ -1353,38 +1353,50 @@ static void DrawHands(const Scene* s)
     }
 }
 
+static Color Melt(Color c, float fade)
+{
+    Color ground = { 96, 142, 82, 255 };
+    if (fade < 0.0f) fade = 0.0f;
+    if (fade > 1.0f) fade = 1.0f;
+    Color o;
+    o.r = (unsigned char)((float)ground.r + ((float)c.r - (float)ground.r) * fade);
+    o.g = (unsigned char)((float)ground.g + ((float)c.g - (float)ground.g) * fade);
+    o.b = (unsigned char)((float)ground.b + ((float)c.b - (float)ground.b) * fade);
+    o.a = 255;
+    return o;
+}
+
 static void DrawProp(const Prop* p)
 {
     Vector3 pos = { p->x, p->y, p->z };
-    float s = p->scale;
+    float fade = p->fade;
+    float s = p->scale * (0.55f + 0.45f * fade);
     if (p->kind == 0) {
-        DrawCylinder(pos, 0.08f * s, 0.10f * s, 0.7f * s, 5, (Color){ 92, 64, 40, 255 });
-        DrawSphere((Vector3){ pos.x, pos.y + 1.05f * s, pos.z }, 0.55f * s, (Color){ 48, 130, 62, 255 });
+        DrawCylinder(pos, 0.08f * s, 0.10f * s, 0.7f * s, 5, Melt((Color){ 92, 64, 40, 255 }, fade));
+        DrawSphere((Vector3){ pos.x, pos.y + 1.05f * s, pos.z }, 0.55f * s, Melt((Color){ 48, 130, 62, 255 }, fade));
     } else if (p->kind == 1) {
-        DrawCylinder(pos, 0.07f * s, 0.09f * s, 0.55f * s, 5, (Color){ 84, 60, 40, 255 });
-        DrawCylinder((Vector3){ pos.x, pos.y + 0.45f * s, pos.z }, 0.02f, 0.55f * s, 1.7f * s, 6, (Color){ 30, 90, 58, 255 });
+        DrawCylinder(pos, 0.07f * s, 0.09f * s, 0.55f * s, 5, Melt((Color){ 84, 60, 40, 255 }, fade));
+        DrawCylinder((Vector3){ pos.x, pos.y + 0.45f * s, pos.z }, 0.02f, 0.55f * s, 1.7f * s, 6, Melt((Color){ 30, 90, 58, 255 }, fade));
     } else if (p->kind == 2) {
-        DrawCube((Vector3){ pos.x, pos.y + 0.25f * s, pos.z }, 0.7f * s, 0.45f * s, 0.55f * s, (Color){ 128, 126, 120, 255 });
+        DrawCube((Vector3){ pos.x, pos.y + 0.25f * s, pos.z }, 0.7f * s, 0.45f * s, 0.55f * s, Melt((Color){ 128, 126, 120, 255 }, fade));
     } else if (p->kind == 3) {
-        DrawCube((Vector3){ pos.x, pos.y + 0.7f, pos.z }, 1.6f, 1.3f, 1.4f, (Color){ 196, 168, 140, 255 });
-        DrawCylinder((Vector3){ pos.x, pos.y + 1.35f, pos.z }, 0.05f, 1.15f, 0.7f, 4, (Color){ 150, 64, 52, 255 });
+        DrawCube((Vector3){ pos.x, pos.y + 0.7f * s, pos.z }, 1.6f * s, 1.3f * s, 1.4f * s, Melt((Color){ 196, 168, 140, 255 }, fade));
+        DrawCylinder((Vector3){ pos.x, pos.y + 1.35f * s, pos.z }, 0.05f * s, 1.15f * s, 0.7f * s, 4, Melt((Color){ 150, 64, 52, 255 }, fade));
     } else if (p->kind == 4) {
-        /* Barn and a silo, sat on the field grid. */
-        DrawCube((Vector3){ pos.x, pos.y + 1.15f * s, pos.z }, 3.6f * s, 2.3f * s, 2.3f * s, (Color){ 176, 84, 62, 255 });
-        DrawCube((Vector3){ pos.x, pos.y + 2.45f * s, pos.z }, 3.9f * s, 0.38f * s, 2.55f * s, (Color){ 148, 42, 40, 255 });
-        DrawCylinder((Vector3){ pos.x + 2.35f * s, pos.y, pos.z + 0.2f }, 0.55f * s, 0.55f * s, 2.8f * s, 6, (Color){ 198, 198, 190, 255 });
-        DrawCylinder((Vector3){ pos.x + 2.35f * s, pos.y + 2.7f * s, pos.z + 0.2f }, 0.05f, 0.7f * s, 0.35f * s, 6, (Color){ 150, 150, 146, 255 });
+        DrawCube((Vector3){ pos.x, pos.y + 1.15f * s, pos.z }, 3.6f * s, 2.3f * s, 2.3f * s, Melt((Color){ 176, 84, 62, 255 }, fade));
+        DrawCube((Vector3){ pos.x, pos.y + 2.45f * s, pos.z }, 3.9f * s, 0.38f * s, 2.55f * s, Melt((Color){ 148, 42, 40, 255 }, fade));
+        DrawCylinder((Vector3){ pos.x + 2.35f * s, pos.y, pos.z + 0.2f }, 0.55f * s, 0.55f * s, 2.8f * s, 6, Melt((Color){ 198, 198, 190, 255 }, fade));
+        DrawCylinder((Vector3){ pos.x + 2.35f * s, pos.y + 2.7f * s, pos.z + 0.2f }, 0.05f * s, 0.7f * s, 0.35f * s, 6, Melt((Color){ 150, 150, 146, 255 }, fade));
     } else {
-        /* City block or tower. Scale is the storey count, not a uniform grow. */
         float tall = (p->kind == 6) ? 1.45f : 1.0f;
         float height = (14.0f + s * 7.0f) * tall;
         float w = (p->kind == 6) ? 12.0f + s * 2.0f : 22.0f + s * 4.0f;
         float d = w * 0.72f;
         Color wall = (p->kind == 6) ? (Color){ 118, 128, 140, 255 } : (Color){ 188, 176, 160, 255 };
         if (((int)floorf(pos.x + pos.z) & 1) != 0) wall = (Color){ 164, 172, 180, 255 };
-        DrawCube((Vector3){ pos.x, pos.y + height * 0.5f, pos.z }, w, height, d, wall);
-        DrawCube((Vector3){ pos.x, pos.y + height + 0.12f, pos.z }, w + 0.35f, 0.28f, d + 0.35f, (Color){ 92, 96, 102, 255 });
-        Color glass = { 64, 92, 112, 255 };
+        DrawCube((Vector3){ pos.x, pos.y + height * 0.5f, pos.z }, w, height, d, Melt(wall, fade));
+        DrawCube((Vector3){ pos.x, pos.y + height + 0.12f, pos.z }, w + 0.35f, 0.28f, d + 0.35f, Melt((Color){ 92, 96, 102, 255 }, fade));
+        Color glass = Melt((Color){ 64, 92, 112, 255 }, fade);
         float band = height * 0.42f;
         DrawCube((Vector3){ pos.x, pos.y + height * 0.55f, pos.z + d * 0.5f + 0.04f }, w * 0.72f, band, 0.08f, glass);
         DrawCube((Vector3){ pos.x + w * 0.5f + 0.04f, pos.y + height * 0.55f, pos.z }, 0.08f, band, d * 0.72f, glass);

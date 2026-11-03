@@ -103,9 +103,9 @@ static int UploadFlat(Mesh* mesh, int vertCount, float* v, float* nrm, unsigned 
     return 1;
 }
 
-static void PushProp(ChunkMesh* out, int kind, float x, float y, float z, float yaw, float scale)
+static void PushProp(ChunkMesh* out, int kind, float x, float y, float z, float yaw, float scale, float fade)
 {
-    if (out->propCount >= CHUNK_MAX_PROPS) return;
+    if (out->propCount >= CHUNK_MAX_PROPS || fade < 0.04f) return;
     Prop* p = &out->props[out->propCount++];
     p->kind = kind;
     p->x = x;
@@ -113,6 +113,7 @@ static void PushProp(ChunkMesh* out, int kind, float x, float y, float z, float 
     p->z = z;
     p->yaw = yaw;
     p->scale = scale;
+    p->fade = fade;
 }
 
 static float FadeScale(float x, float z, float viewX, float viewZ, float begin, float end)
@@ -124,8 +125,17 @@ static float FadeScale(float x, float z, float viewX, float viewZ, float begin, 
     return 1.0f - s;
 }
 
-/* Blocks whose centres fall in this chunk. Parks keep a tree instead of a roof.
- * Scale eases off with distance so a building does not vanish on a ring. */
+/* Trees and roofs only inside the two finest rings. Past that the shader
+ * colour is the forest and the town, so nothing pops in at the boundary. */
+static void PropFadeRange(float* begin, float* end)
+{
+    float inner = Terrain_RingRadius(0);
+    float outer = Terrain_RingRadius(1);
+    if (outer < inner + 40.0f) outer = inner + 40.0f;
+    *begin = inner * 0.72f;
+    *end = outer;
+}
+
 static void AddCity(float x0, float z0, float size, float viewX, float viewZ, ChunkMesh* out)
 {
     const float block = TERRAIN_CITY_BLOCK;
@@ -133,6 +143,8 @@ static void AddCity(float x0, float z0, float size, float viewX, float viewZ, Ch
     int i1 = (int)floorf((x0 + size - 0.01f) / block);
     int k0 = (int)floorf(z0 / block);
     int k1 = (int)floorf((z0 + size - 0.01f) / block);
+    float fade0, fade1;
+    PropFadeRange(&fade0, &fade1);
     for (int iz = k0; iz <= k1; iz++) {
         for (int ix = i0; ix <= i1; ix++) {
             if (out->propCount >= CHUNK_MAX_PROPS) return;
@@ -143,18 +155,16 @@ static void AddCity(float x0, float z0, float size, float viewX, float viewZ, Ch
             float py = Terrain_Height(px, pz);
             if (py < TERRAIN_WATER + 1.0f) continue;
             unsigned int h = CellHash(ix, iz);
+            float fade = FadeScale(px, pz, viewX, viewZ, fade0, fade1);
+            if (fade < 0.04f) continue;
             if ((h % 11u) == 0u) {
-                float fade = FadeScale(px, pz, viewX, viewZ, 110.0f, 260.0f);
-                if (fade < 0.05f) continue;
-                PushProp(out, 0, px, py, pz, 0.0f, 1.35f * fade);
+                PushProp(out, 0, px, py, pz, 0.0f, 1.35f, fade);
                 continue;
             }
-            float fade = FadeScale(px, pz, viewX, viewZ, 180.0f, 320.0f);
-            if (fade < 0.05f) continue;
             int tower = (h % 5u) == 0u;
             float scale = 1.1f + (float)(h % 100u) / 100.0f * 1.2f;
             if (tower) scale += 0.7f;
-            PushProp(out, tower ? 6 : 5, px, py, pz, 0.0f, scale * fade);
+            PushProp(out, tower ? 6 : 5, px, py, pz, 0.0f, scale, fade);
         }
     }
 }
@@ -168,6 +178,8 @@ static void AddProps(int cx, int cz, float x0, float z0, float size, int lod,
     AddCity(x0, z0, size, viewX, viewZ, out);
     if (lod > 2) return;
 
+    float fade0, fade1;
+    PropFadeRange(&fade0, &fade1);
     const int cells = 5;
     float cell = size / (float)cells;
     for (int jz = 0; jz < cells; jz++) {
@@ -178,45 +190,44 @@ static void AddProps(int cx, int cz, float x0, float z0, float size, int lod,
             unsigned int h = CellHash(wx, wz);
             float px = x0 + ((float)jx + 0.18f + (float)(h & 255) / 255.0f * 0.64f) * cell;
             float pz = z0 + ((float)jz + 0.18f + (float)((h >> 8) & 255) / 255.0f * 0.64f) * cell;
+            float fade = FadeScale(px, pz, viewX, viewZ, fade0, fade1);
+            if (fade < 0.04f) continue;
             float py = Terrain_Height(px, pz);
             if (py < TERRAIN_WATER + 0.6f) continue;
             float nx, ny, nz;
             Terrain_Normal(px, pz, &nx, &ny, &nz);
             int zone = Terrain_Zone(px, pz);
-            float fade = FadeScale(px, pz, viewX, viewZ, 110.0f, 260.0f);
-            if (fade < 0.05f) continue;
-            float scale = (0.8f + (float)((h >> 12) % 100u) / 100.0f * 0.85f) * fade;
+            float scale = 0.8f + (float)((h >> 12) % 100u) / 100.0f * 0.85f;
 
             if (zone == TERRAIN_ZONE_CITY) continue;
             if (zone == TERRAIN_ZONE_FARM) {
                 if (ny < 0.9f) continue;
-                if ((h % 53u) == 0u) PushProp(out, 4, px, py, pz, 0.0f, 2.6f * fade);
-                else if ((h % 17u) == 0u) PushProp(out, 0, px, py, pz, (float)(h % 360u), scale);
+                if ((h % 53u) == 0u) PushProp(out, 4, px, py, pz, 0.0f, 2.6f, fade);
+                else if ((h % 17u) == 0u) PushProp(out, 0, px, py, pz, (float)(h % 360u), scale, fade);
                 continue;
             }
             if (ny < 0.84f) {
                 if (zone == TERRAIN_ZONE_HIGHLAND && (h % 3u) == 0u)
-                    PushProp(out, 2, px, py, pz, (float)(h % 360u), 0.7f + scale);
+                    PushProp(out, 2, px, py, pz, (float)(h % 360u), 0.7f + scale, fade);
                 continue;
             }
             if (zone == TERRAIN_ZONE_FOREST) {
                 if ((h % 5u) == 0u) continue;
-                float tree = (2.4f + (float)((h >> 12) % 100u) / 100.0f * 1.8f) * fade;
-                PushProp(out, (h % 3u) == 0u ? 1 : 0, px, py, pz, (float)(h % 360u), tree);
+                float tree = 2.4f + (float)((h >> 12) % 100u) / 100.0f * 1.8f;
+                PushProp(out, (h % 3u) == 0u ? 1 : 0, px, py, pz, (float)(h % 360u), tree, fade);
                 continue;
             }
             if (zone == TERRAIN_ZONE_HIGHLAND) {
                 if ((h % 2u) != 0u) continue;
-                PushProp(out, (h % 4u) == 0u ? 2 : 1, px, py, pz, (float)(h % 360u), scale);
+                PushProp(out, (h % 4u) == 0u ? 2 : 1, px, py, pz, (float)(h % 360u), scale, fade);
                 continue;
             }
-            /* Open country: a few trees, the odd farmhouse. */
             if ((h % 29u) == 0u && py < 36.0f) {
-                PushProp(out, 3, px, py, pz, 0.0f, fade);
+                PushProp(out, 3, px, py, pz, 0.0f, 1.0f, fade);
                 continue;
             }
             if ((h % 4u) != 0u) continue;
-            PushProp(out, 0, px, py, pz, (float)(h % 360u), scale);
+            PushProp(out, 0, px, py, pz, (float)(h % 360u), scale, fade);
         }
     }
 }
@@ -770,12 +781,16 @@ int Clip_GatherProps(float viewX, float viewZ, Prop* dst, int cap)
     const float tile = 64.0f;
     int ccx = (int)floorf(viewX / tile);
     int ccz = (int)floorf(viewZ / tile);
-    for (int dz = -6; dz <= 6; dz++) {
-        for (int dx = -6; dx <= 6; dx++) {
+    float reach = Terrain_RingRadius(1);
+    int span = (int)ceilf(reach / tile) + 1;
+    if (span < 2) span = 2;
+    if (span > 10) span = 10;
+    for (int dz = -span; dz <= span; dz++) {
+        for (int dx = -span; dx <= span; dx++) {
             float x0 = (float)(ccx + dx) * tile;
             float z0 = (float)(ccz + dz) * tile;
             float dist = hypotf(x0 + tile * 0.5f - viewX, z0 + tile * 0.5f - viewZ);
-            if (dist > 340.0f) continue;
+            if (dist > reach) continue;
             ChunkMesh tmp;
             memset(&tmp, 0, sizeof(tmp));
             AddProps(0, 0, x0, z0, tile, dist < 160.0f ? 0 : 2, viewX, viewZ, &tmp);
