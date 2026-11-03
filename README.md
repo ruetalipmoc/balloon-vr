@@ -20,7 +20,7 @@ On the **left wrist** a flat instrument shows:
 * altitude above the ground under the basket, and height above the world datum
 * wind direction and strength at -50 m, here, +50 m and +100 m
 
-The landscape is generated from a fixed seed as you drift: rolling ground, river valleys and lakes, and broad regions of farmland (square fields), forest, open country and small towns. The mesh only carries the shape. Fields, streets, canopy and the blue haze are drawn per pixel, so a coarse triangle still shows square plots instead of diamonds. Lakes and rivers are one flat sheet; the shore is the line where the ground crosses it. Detail steps down with distance. The farthest ground drains into the sky.
+The landscape is generated from a fixed seed as you drift: rolling ground, river valleys and lakes, and broad regions of farmland (square fields), forest, open country and small towns. The ground is a stack of rings around the basket, each twice as coarse as the one inside, and the join between two rings is faded so it does not crack. Fields, streets, canopy and the blue haze are drawn per pixel. Lakes and rivers are one flat sheet; the shore is the line where the ground crosses it. The farthest ground drains into the sky.
 There are no art assets — meshes, the wicker basket, the envelope and the
 watch face are built in code.
 

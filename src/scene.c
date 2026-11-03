@@ -21,17 +21,15 @@ extern void glEnable(unsigned int cap);
 extern void glDisable(unsigned int cap);
 extern void glPolygonOffset(float factor, float units);
 
-/* 24 chunks * 64 m = TERRAIN_VIEW_MAX. Kept an integer so the slot array
- * is a real compile-time size, not a variable-length array. */
-#define CHUNK_RADIUS_MAX 24
-#define MAX_CHUNKS ((CHUNK_RADIUS_MAX * 2 + 1) * (CHUNK_RADIUS_MAX * 2 + 1))
+/* Clipmap rings replace the old chunk slots. */
 #define MAX_PARTICLES 192
+#define MAX_PROPS 768
 
-typedef struct Slot {
-    int occupied;
-    int cx, cz, lod;
-    ChunkMesh mesh;
-} Slot;
+typedef struct ClipSlot {
+    Mesh mesh;
+    int ready;
+    ClipJob job;
+} ClipSlot;
 
 typedef struct Particle {
     float x, y, z;
@@ -53,10 +51,11 @@ struct Scene {
     Mesh envelope;
     Mesh crown;
     Mesh sky;
-    Mesh farField;
-    int farReady;
-    int farCx, farCz, farRadius;
-    float farOuter;
+    ClipSlot clip[CLIP_LEVELS];
+    Prop props[MAX_PROPS];
+    int propCount;
+    int propsReady;
+    float propX, propZ;
     int resetView;
     Material material;
     Material groundMat;
@@ -65,8 +64,6 @@ struct Scene {
     int locWater;
     int locSheet;
     int meshesReady;
-
-    Slot slots[MAX_CHUNKS];
 
     Particle particles[MAX_PARTICLES];
     Sound burner;
@@ -414,14 +411,13 @@ Scene* Scene_Create(void)
 void Scene_Destroy(Scene* s)
 {
     if (!s) return;
-    for (int i = 0; i < MAX_CHUNKS; i++) {
-        if (s->slots[i].occupied) ChunkMesh_Free(&s->slots[i].mesh);
+    for (int i = 0; i < CLIP_LEVELS; i++) {
+        if (s->clip[i].ready) UnloadMesh(s->clip[i].mesh);
     }
     if (s->meshesReady) {
         UnloadMesh(s->envelope);
         UnloadMesh(s->crown);
         UnloadMesh(s->sky);
-        if (s->farReady) UnloadMesh(s->farField);
         UnloadMaterial(s->groundMat);
         UnloadMaterial(s->material);
     }
@@ -545,119 +541,45 @@ void Scene_Update(Scene* s, const HandInput hands[2], float dt, int keyBurner, i
     Watch_Render(&s->watch, &s->balloon, s->groundY);
 }
 
-static Slot* FindSlot(Scene* s, int cx, int cz)
+static int SameJob(const ClipJob* a, const ClipJob* b)
 {
-    for (int i = 0; i < MAX_CHUNKS; i++) {
-        if (s->slots[i].occupied && s->slots[i].cx == cx && s->slots[i].cz == cz) return &s->slots[i];
-    }
-    return NULL;
+    return fabsf(a->cx - b->cx) < 0.05f && fabsf(a->cz - b->cz) < 0.05f
+        && fabsf(a->radius - b->radius) < 0.05f
+        && fabsf(a->holeL - b->holeL) < 0.05f && fabsf(a->holeR - b->holeR) < 0.05f
+        && fabsf(a->holeB - b->holeB) < 0.05f && fabsf(a->holeT - b->holeT) < 0.05f
+        && fabsf(a->boundL - b->boundL) < 0.05f && fabsf(a->boundR - b->boundR) < 0.05f
+        && fabsf(a->boundB - b->boundB) < 0.05f && fabsf(a->boundT - b->boundT) < 0.05f
+        && a->hasHole == b->hasHole && a->morph == b->morph;
 }
 
-static Slot* AllocSlot(Scene* s)
-{
-    for (int i = 0; i < MAX_CHUNKS; i++) {
-        if (!s->slots[i].occupied) return &s->slots[i];
-    }
-    return NULL;
-}
-
-static int ChunkRadius(void)
-{
-    int radius = (int)ceilf(Terrain_ViewDistance() / TERRAIN_CHUNK_SIZE);
-    if (radius < 1) radius = 1;
-    if (radius > CHUNK_RADIUS_MAX) radius = CHUNK_RADIUS_MAX;
-    return radius;
-}
-
-static void UpdateChunks(Scene* s)
+static void UpdateClip(Scene* s)
 {
     float agl = s->balloon.altitude - s->groundY;
     Terrain_ApplyAltitude(agl);
-
-    int ccx = (int)floorf(s->balloon.x / TERRAIN_CHUNK_SIZE);
-    int ccz = (int)floorf(s->balloon.z / TERRAIN_CHUNK_SIZE);
-    int radius = ChunkRadius();
-
-    for (int i = 0; i < MAX_CHUNKS; i++) {
-        if (!s->slots[i].occupied) continue;
-        int dx = s->slots[i].cx - ccx;
-        int dz = s->slots[i].cz - ccz;
-        if (dx < 0) dx = -dx;
-        if (dz < 0) dz = -dz;
-        if (dx > radius || dz > radius) {
-            ChunkMesh_Free(&s->slots[i].mesh);
-            s->slots[i].occupied = 0;
+    float x = s->balloon.x;
+    float z = s->balloon.z;
+    for (int level = 0; level < CLIP_LEVELS; level++) {
+        ClipJob job;
+        Clip_Describe(level, x, z, &job);
+        ClipSlot* slot = &s->clip[level];
+        if (slot->ready && SameJob(&slot->job, &job)) continue;
+        if (slot->ready) {
+            UnloadMesh(slot->mesh);
+            slot->ready = 0;
+        }
+        if (Clip_Build(&job, &slot->mesh)) {
+            slot->ready = 1;
+            slot->job = job;
         }
     }
-
-    for (int dz = -radius; dz <= radius; dz++) {
-        for (int dx = -radius; dx <= radius; dx++) {
-            int cx = ccx + dx;
-            int cz = ccz + dz;
-            float mx = ((float)cx + 0.5f) * TERRAIN_CHUNK_SIZE;
-            float mz = ((float)cz + 0.5f) * TERRAIN_CHUNK_SIZE;
-            float dist = hypotf(mx - s->balloon.x, mz - s->balloon.z);
-            int lod = Terrain_LodForDistance(dist);
-            Slot* slot = FindSlot(s, cx, cz);
-            if (slot && slot->lod == lod) continue;
-            if (!slot) {
-                slot = AllocSlot(s);
-                if (!slot) continue;
-            } else {
-                ChunkMesh_Free(&slot->mesh);
-            }
-            ChunkMesh_Build(cx, cz, lod, s->balloon.x, s->balloon.z, &slot->mesh);
-            slot->occupied = 1;
-            slot->cx = cx;
-            slot->cz = cz;
-            slot->lod = lod;
-        }
-    }
-}
-
-static float FarExtent(float agl)
-{
-    if (agl < 0.0f) agl = 0.0f;
-    /* From height H the ground has to reach about H / tan(2 deg) before it
-     * sits in the haze at the horizon. Capped so the mesh stays cheap. */
-    float need = 5000.0f + agl * 28.0f;
-    float view = Terrain_ViewDistance() * 4.0f;
-    if (need < view) need = view;
-    if (need < 6000.0f) need = 6000.0f;
-    if (need > 12000.0f) need = 12000.0f;
-    return need;
-}
-
-static void UpdateFar(Scene* s)
-{
-    int ccx = (int)floorf(s->balloon.x / TERRAIN_CHUNK_SIZE);
-    int ccz = (int)floorf(s->balloon.z / TERRAIN_CHUNK_SIZE);
-    int radius = ChunkRadius();
-    float agl = s->balloon.altitude - s->groundY;
-    float outer = ceilf(FarExtent(agl) / 256.0f) * 256.0f;
-    if (s->farReady && s->farCx == ccx && s->farCz == ccz && s->farRadius == radius &&
-        fabsf(s->farOuter - outer) < 1.0f) return;
-
-    if (s->farReady) {
-        UnloadMesh(s->farField);
-        s->farReady = 0;
-    }
-    float hx0 = (float)(ccx - radius) * TERRAIN_CHUNK_SIZE;
-    float hx1 = (float)(ccx + radius + 1) * TERRAIN_CHUNK_SIZE;
-    float hz0 = (float)(ccz - radius) * TERRAIN_CHUNK_SIZE;
-    float hz1 = (float)(ccz + radius + 1) * TERRAIN_CHUNK_SIZE;
-    float edgeDist = ((float)radius - 0.5f) * TERRAIN_CHUNK_SIZE;
-    if (edgeDist < 1.0f) edgeDist = 1.0f;
-    int own = Terrain_GridForLod(Terrain_LodForDistance(edgeDist));
-    int neighbor = Terrain_GridForLod(Terrain_LodForDistance(edgeDist + TERRAIN_CHUNK_SIZE));
-    int edgeGrid = own < neighbor ? own : neighbor;
-    float seam = TERRAIN_CHUNK_SIZE / (float)edgeGrid;
-    if (FarField_Build(s->balloon.x, s->balloon.z, hx0, hx1, hz0, hz1, outer, seam, &s->farField)) {
-        s->farReady = 1;
-        s->farCx = ccx;
-        s->farCz = ccz;
-        s->farRadius = radius;
-        s->farOuter = outer;
+    float snap = 32.0f;
+    float px = floorf(x / snap) * snap;
+    float pz = floorf(z / snap) * snap;
+    if (!s->propsReady || fabsf(px - s->propX) > 0.5f || fabsf(pz - s->propZ) > 0.5f) {
+        s->propCount = Clip_GatherProps(x, z, s->props, MAX_PROPS);
+        s->propX = px;
+        s->propZ = pz;
+        s->propsReady = 1;
     }
 }
 
@@ -1253,8 +1175,7 @@ static void DrawParticles(const Scene* s)
  * shore itself is a one-pixel fade in the ground shader. */
 static void DrawWaterSheet(const Scene* s)
 {
-    float reach = s->farOuter + 512.0f;
-    if (reach < 8000.0f) reach = 8000.0f;
+    float reach = 17000.0f;
     float x = s->balloon.x;
     float z = s->balloon.z;
     float y = TERRAIN_WATER - 0.35f;
@@ -1291,8 +1212,7 @@ static void DrawWaterSheet(const Scene* s)
 
 void Scene_Draw(Scene* s, Vector3 eye)
 {
-    UpdateChunks(s);
-    UpdateFar(s);
+    UpdateClip(s);
 
     rlDisableDepthMask();
     rlDisableBackfaceCulling();
@@ -1318,16 +1238,12 @@ void Scene_Draw(Scene* s, Vector3 eye)
     }
     DrawWaterSheet(s);
     BeginBlendMode(BLEND_ALPHA);
-    if (s->farReady) DrawMesh(s->farField, s->groundMat, MatrixIdentity());
-    for (int i = 0; i < MAX_CHUNKS; i++) {
-        if (!s->slots[i].occupied || !s->slots[i].mesh.ready) continue;
-        DrawMesh(s->slots[i].mesh.ground, s->groundMat, MatrixIdentity());
+    for (int i = CLIP_LEVELS - 1; i >= 0; i--) {
+        if (!s->clip[i].ready) continue;
+        DrawMesh(s->clip[i].mesh, s->groundMat, MatrixIdentity());
     }
     EndBlendMode();
-    for (int i = 0; i < MAX_CHUNKS; i++) {
-        if (!s->slots[i].occupied) continue;
-        for (int p = 0; p < s->slots[i].mesh.propCount; p++) DrawProp(&s->slots[i].mesh.props[p]);
-    }
+    for (int p = 0; p < s->propCount; p++) DrawProp(&s->props[p]);
     DrawClouds(&s->balloon);
     rlPopMatrix();
 

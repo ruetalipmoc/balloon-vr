@@ -440,3 +440,247 @@ int FarField_Build(float viewX, float viewZ,
     UploadFlat(out, buf.count, buf.v, buf.n, buf.c, buf.uv);
     return 1;
 }
+
+/* Half-width of every ring, in cells. 32 cells * 4 m = 128 m at the centre,
+ * and each coarser ring doubles both the spacing and the reach. */
+#define CLIP_HALF 32
+
+static Color LerpCover(Color a, Color b, float t)
+{
+    Color c = LerpColor(a, b, t);
+    c.a = (unsigned char)((float)a.a + ((float)b.a - (float)a.a) * t + 0.5f);
+    return c;
+}
+
+typedef struct Shade {
+    float y, nx, ny, nz;
+    Color cover;
+} Shade;
+
+static Shade ShadeAt(float x, float z)
+{
+    Shade s;
+    s.y = Terrain_Height(x, z);
+    Terrain_Normal(x, z, &s.nx, &s.ny, &s.nz);
+    s.cover = CoverColor(x, z);
+    return s;
+}
+
+static Shade LerpShade(Shade a, Shade b, float t)
+{
+    Shade s;
+    s.y = a.y + (b.y - a.y) * t;
+    s.nx = a.nx + (b.nx - a.nx) * t;
+    s.ny = a.ny + (b.ny - a.ny) * t;
+    s.nz = a.nz + (b.nz - a.nz) * t;
+    s.cover = LerpCover(a.cover, b.cover, t);
+    float len = sqrtf(s.nx * s.nx + s.ny * s.ny + s.nz * s.nz);
+    if (len < 1.0e-5f) {
+        s.nx = 0.0f;
+        s.ny = 1.0f;
+        s.nz = 0.0f;
+    } else {
+        s.nx /= len;
+        s.ny /= len;
+        s.nz /= len;
+    }
+    return s;
+}
+
+/* Height of the coarser lattice, so a fully morphed edge lies on that ring. */
+static Shade ShadeCoarse(float x, float z, float spacing)
+{
+    float x0 = floorf(x / spacing) * spacing;
+    float z0 = floorf(z / spacing) * spacing;
+    float tx = (x - x0) / spacing;
+    float tz = (z - z0) / spacing;
+    if (tx < 0.0f) tx = 0.0f;
+    if (tx > 1.0f) tx = 1.0f;
+    if (tz < 0.0f) tz = 0.0f;
+    if (tz > 1.0f) tz = 1.0f;
+    Shade s00 = ShadeAt(x0, z0);
+    Shade s10 = ShadeAt(x0 + spacing, z0);
+    Shade s01 = ShadeAt(x0, z0 + spacing);
+    Shade s11 = ShadeAt(x0 + spacing, z0 + spacing);
+    return LerpShade(LerpShade(s00, s10, tx), LerpShade(s01, s11, tz), tz);
+}
+
+static float MorphAlpha(float x, float z, float L, float R, float B, float T)
+{
+    float dx = x - L;
+    float dx2 = R - x;
+    if (dx2 < dx) dx = dx2;
+    float dz = z - B;
+    float dz2 = T - z;
+    if (dz2 < dz) dz = dz2;
+    float edge = dx < dz ? dx : dz;
+    float halfW = (R - L) * 0.5f;
+    float band = halfW * 0.30f;
+    if (band < 1.0f) band = 1.0f;
+    float a = 1.0f - edge / band;
+    if (a < 0.0f) a = 0.0f;
+    if (a > 1.0f) a = 1.0f;
+    return a;
+}
+
+static Shade ShadeMorph(float x, float z, const ClipJob* job)
+{
+    Shade fine = ShadeAt(x, z);
+    if (!job->morph) return fine;
+    float a = MorphAlpha(x, z, job->boundL, job->boundR, job->boundB, job->boundT);
+    if (a <= 0.001f) return fine;
+    return LerpShade(fine, ShadeCoarse(x, z, job->spacing * 2.0f), a);
+}
+
+void Clip_Describe(int level, float viewX, float viewZ, ClipJob* job)
+{
+    float s = 4.0f * (float)(1 << level);
+    float half = (float)CLIP_HALF * s;
+    float cx = floorf(viewX / s) * s;
+    float cz = floorf(viewZ / s) * s;
+    memset(job, 0, sizeof(*job));
+    job->level = level;
+    job->spacing = s;
+    job->cx = cx;
+    job->cz = cz;
+    job->radius = half;
+    if (level > 0) {
+        float s0 = s * 0.5f;
+        float half0 = (float)CLIP_HALF * s0;
+        float cx0 = floorf(viewX / s0) * s0;
+        float cz0 = floorf(viewZ / s0) * s0;
+        job->holeL = floorf((cx0 - half0) / s + 1.0e-4f) * s;
+        job->holeR = ceilf((cx0 + half0) / s - 1.0e-4f) * s;
+        job->holeB = floorf((cz0 - half0) / s + 1.0e-4f) * s;
+        job->holeT = ceilf((cz0 + half0) / s - 1.0e-4f) * s;
+        job->hasHole = 1;
+    }
+    if (level + 1 < CLIP_LEVELS) {
+        float S = s * 2.0f;
+        job->boundL = floorf((cx - half) / S + 1.0e-4f) * S;
+        job->boundR = ceilf((cx + half) / S - 1.0e-4f) * S;
+        job->boundB = floorf((cz - half) / S + 1.0e-4f) * S;
+        job->boundT = ceilf((cz + half) / S - 1.0e-4f) * S;
+        job->morph = 1;
+    } else {
+        job->boundL = cx - half;
+        job->boundR = cx + half;
+        job->boundB = cz - half;
+        job->boundT = cz + half;
+        job->morph = 0;
+    }
+}
+
+static int QuadInside(float x, float z, float s, float L, float R, float B, float T)
+{
+    return x >= L - 0.05f && x + s <= R + 0.05f && z >= B - 0.05f && z + s <= T + 0.05f;
+}
+
+static void PushQuad(float* v, float* n, unsigned char* c, float* uv, int* i,
+                      float x, float z, float s, Shade s00, Shade s10, Shade s11, Shade s01)
+{
+    float xs[4] = { x, x + s, x + s, x };
+    float zs[4] = { z, z, z + s, z + s };
+    Shade sh[4] = { s00, s10, s11, s01 };
+    int tris[2][3] = { { 0, 2, 1 }, { 0, 3, 2 } };
+    for (int t = 0; t < 2; t++) {
+        for (int k = 0; k < 3; k++) {
+            int id = tris[t][k];
+            PushVert(v, n, c, uv, *i, xs[id], sh[id].y, zs[id],
+                     sh[id].nx, sh[id].ny, sh[id].nz, sh[id].cover);
+            (*i)++;
+        }
+    }
+}
+
+int Clip_Build(const ClipJob* job, Mesh* out)
+{
+    float s = job->spacing;
+    float half = job->radius;
+    int n = CLIP_HALF * 2;
+    int mainQuads = n * n;
+    int trimQuads = job->morph ? (8 * n + 64) : 0;
+    int maxVerts = (mainQuads + trimQuads) * 6;
+    float* gv = (float*)MemAlloc((unsigned int)maxVerts * 3 * sizeof(float));
+    float* gn = (float*)MemAlloc((unsigned int)maxVerts * 3 * sizeof(float));
+    unsigned char* gc = (unsigned char*)MemAlloc((unsigned int)maxVerts * 4);
+    float* gu = (float*)MemAlloc((unsigned int)maxVerts * 2 * sizeof(float));
+    if (!gv || !gn || !gc || !gu) {
+        MemFree(gv);
+        MemFree(gn);
+        MemFree(gc);
+        MemFree(gu);
+        return 0;
+    }
+
+    int gi = 0;
+    float x0 = job->cx - half;
+    float z0 = job->cz - half;
+    for (int j = 0; j < n; j++) {
+        float z = z0 + (float)j * s;
+        for (int i = 0; i < n; i++) {
+            float x = x0 + (float)i * s;
+            if (job->hasHole && QuadInside(x, z, s, job->holeL, job->holeR, job->holeB, job->holeT))
+                continue;
+            if (gi + 6 > maxVerts) break;
+            Shade s00 = ShadeMorph(x, z, job);
+            Shade s10 = ShadeMorph(x + s, z, job);
+            Shade s11 = ShadeMorph(x + s, z + s, job);
+            Shade s01 = ShadeMorph(x, z + s, job);
+            PushQuad(gv, gn, gc, gu, &gi, x, z, s, s00, s10, s11, s01);
+        }
+    }
+
+    /* The ring is snapped to its own grid, so it does not share a centre
+     * with the finer ring. The gap, at most one coarse cell wide, is filled
+     * here and fully morphed onto the coarser surface. */
+    if (job->morph) {
+        int nx = (int)floorf((job->boundR - job->boundL) / s + 0.5f);
+        int nz = (int)floorf((job->boundT - job->boundB) / s + 0.5f);
+        for (int j = 0; j < nz; j++) {
+            float z = job->boundB + (float)j * s;
+            for (int i = 0; i < nx; i++) {
+                float x = job->boundL + (float)i * s;
+                if (QuadInside(x, z, s, x0, x0 + half * 2.0f, z0, z0 + half * 2.0f)) continue;
+                if (gi + 6 > maxVerts) break;
+                Shade s00 = ShadeMorph(x, z, job);
+                Shade s10 = ShadeMorph(x + s, z, job);
+                Shade s11 = ShadeMorph(x + s, z + s, job);
+                Shade s01 = ShadeMorph(x, z + s, job);
+                PushQuad(gv, gn, gc, gu, &gi, x, z, s, s00, s10, s11, s01);
+            }
+        }
+    }
+
+    if (gi < 3) {
+        MemFree(gv);
+        MemFree(gn);
+        MemFree(gc);
+        MemFree(gu);
+        return 0;
+    }
+    UploadFlat(out, gi, gv, gn, gc, gu);
+    return 1;
+}
+
+int Clip_GatherProps(float viewX, float viewZ, Prop* dst, int cap)
+{
+    int n = 0;
+    const float tile = 64.0f;
+    int ccx = (int)floorf(viewX / tile);
+    int ccz = (int)floorf(viewZ / tile);
+    for (int dz = -6; dz <= 6; dz++) {
+        for (int dx = -6; dx <= 6; dx++) {
+            float x0 = (float)(ccx + dx) * tile;
+            float z0 = (float)(ccz + dz) * tile;
+            float dist = hypotf(x0 + tile * 0.5f - viewX, z0 + tile * 0.5f - viewZ);
+            if (dist > 340.0f) continue;
+            ChunkMesh tmp;
+            memset(&tmp, 0, sizeof(tmp));
+            AddProps(0, 0, x0, z0, tile, dist < 160.0f ? 0 : 2, viewX, viewZ, &tmp);
+            for (int p = 0; p < tmp.propCount && n < cap; p++) dst[n++] = tmp.props[p];
+        }
+    }
+    return n;
+}
+
