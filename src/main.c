@@ -299,13 +299,18 @@ static void PrintUsage(void)
     printf("           twice as coarse as the one inside it.\n");
     printf("  --newgen Precompute a low-res Perlin sheet and refine it in\n");
     printf("           nested tiles around the basket. No trees or buildings.\n");
+    printf("           The web build does this unless told otherwise.\n");
     printf("  --seed   Integer seed for --newgen (default 1).\n");
 }
 
 int main(int argc, char** argv)
 {
     int forceDesktop = 0;
+#ifdef __EMSCRIPTEN__
+    int newgen = 1;
+#else
     int newgen = 0;
+#endif
     unsigned int seed = 1;
     float view = TERRAIN_VIEW_DEFAULT;
     int rings = TERRAIN_RINGS_DEFAULT;
