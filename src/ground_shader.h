@@ -1,7 +1,7 @@
 /* Ground appearance, evaluated per pixel in world space.
  * Desktop is GLSL 330. The web build is OpenGL ES 2.0 (GLSL 100).
- * Both share the same body. Vertex colours carry the cover weights
- * (city, farm, forest, highland), not the final albedo. */
+ * Cover (city, farm, forest, highland) comes from a world-space texture
+ * filled on the CPU, so a coarser ring cannot change the colour. */
 #ifndef BALLOON_GROUND_SHADER_H
 #define BALLOON_GROUND_SHADER_H
 
@@ -86,6 +86,7 @@ static const char GROUND_VS_100[] =
     "float shoreAlpha;\n" \
     "vec3 landColor(vec3 world, vec3 nrm, vec4 cover) {\n" \
     "    shoreAlpha = 1.0;\n" \
+    "    cover = coverAt(world.xz);\n" \
     "    float above = world.y - uWater;\n" \
     "    float aa = max(fwidth(world.y), 0.12);\n" \
     "    float dry = smoothstep(0.0, aa, above);\n" \
@@ -140,6 +141,12 @@ static const char GROUND_FS_330[] =
     "in vec3 vNormal;\n"
     "in vec4 vCover;\n"
     "out vec4 finalColor;\n"
+    "uniform sampler2D texture0;\n"
+    "uniform vec4 uCoverMap;\n"
+    "vec4 coverAt(vec2 xz) {\n"
+    "    vec2 uv = (xz - uCoverMap.xy) / max(uCoverMap.z, 1.0);\n"
+    "    return texture(texture0, clamp(uv, vec2(0.001), vec2(0.999)));\n"
+    "}\n"
     GROUND_FS_BODY
     "void main() {\n"
     "    vec3 nrm = normalize(vNormal);\n"
@@ -158,6 +165,12 @@ static const char GROUND_FS_100[] =
     "varying vec3 vWorld;\n"
     "varying vec3 vNormal;\n"
     "varying vec4 vCover;\n"
+    "uniform sampler2D texture0;\n"
+    "uniform vec4 uCoverMap;\n"
+    "vec4 coverAt(vec2 xz) {\n"
+    "    vec2 uv = (xz - uCoverMap.xy) / max(uCoverMap.z, 1.0);\n"
+    "    return texture2D(texture0, clamp(uv, vec2(0.001), vec2(0.999)));\n"
+    "}\n"
     GROUND_FS_BODY
     "void main() {\n"
     "    vec3 nrm = normalize(vNormal);\n"

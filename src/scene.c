@@ -54,6 +54,12 @@ struct Scene {
     Material groundMat;
     int locEye;
     int locWater;
+    int locCoverMap;
+    Texture2D coverTex;
+    unsigned char* coverPx;
+    unsigned char* coverScratch;
+    float coverOriginX, coverOriginZ, coverTexel;
+    int coverReady;
     int meshesReady;
 
     Particle particles[MAX_PARTICLES];
@@ -341,6 +347,100 @@ static void MakeBurnerSound(Scene* s)
     s->audioReady = (s->burner.frameCount > 0);
 }
 
+/* World-space cover. One texel is the same colour on every ring, so the
+ * join between rings cannot change brightness. */
+#define COVER_N 512
+
+static void CoverWrite(unsigned char* px, int i, int j, float ox, float oz, float texel)
+{
+    float city, farm, forest, highland;
+    Terrain_Cover(ox + ((float)i + 0.5f) * texel, oz + ((float)j + 0.5f) * texel,
+                  &city, &farm, &forest, &highland);
+    int k = (j * COVER_N + i) * 4;
+    px[k + 0] = (unsigned char)(Clampf(city, 0.0f, 1.0f) * 255.0f + 0.5f);
+    px[k + 1] = (unsigned char)(Clampf(farm, 0.0f, 1.0f) * 255.0f + 0.5f);
+    px[k + 2] = (unsigned char)(Clampf(forest, 0.0f, 1.0f) * 255.0f + 0.5f);
+    px[k + 3] = (unsigned char)(Clampf(highland, 0.0f, 1.0f) * 255.0f + 0.5f);
+}
+
+static void CoverUpload(Scene* s, float ox, float oz, float texel)
+{
+    UpdateTexture(s->coverTex, s->coverPx);
+    s->coverOriginX = ox;
+    s->coverOriginZ = oz;
+    s->coverTexel = texel;
+}
+
+static void CoverRebuild(Scene* s, float ox, float oz, float texel)
+{
+    for (int j = 0; j < COVER_N; j++) {
+        for (int i = 0; i < COVER_N; i++) CoverWrite(s->coverPx, i, j, ox, oz, texel);
+    }
+    CoverUpload(s, ox, oz, texel);
+}
+
+static void CoverScroll(Scene* s, float ox, float oz, int dx, int dz)
+{
+    unsigned char* src = s->coverPx;
+    unsigned char* dst = s->coverScratch;
+    float texel = s->coverTexel;
+    for (int j = 0; j < COVER_N; j++) {
+        int sj = j + dz;
+        for (int i = 0; i < COVER_N; i++) {
+            int si = i + dx;
+            if (si >= 0 && si < COVER_N && sj >= 0 && sj < COVER_N) {
+                int dk = (j * COVER_N + i) * 4;
+                int sk = (sj * COVER_N + si) * 4;
+                dst[dk + 0] = src[sk + 0];
+                dst[dk + 1] = src[sk + 1];
+                dst[dk + 2] = src[sk + 2];
+                dst[dk + 3] = src[sk + 3];
+            } else {
+                CoverWrite(dst, i, j, ox, oz, texel);
+            }
+        }
+    }
+    s->coverScratch = src;
+    s->coverPx = dst;
+    CoverUpload(s, ox, oz, texel);
+}
+
+static void CoverUpdate(Scene* s, float x, float z)
+{
+    if (!s->coverReady) return;
+    float need = Terrain_OuterRadius() * 2.4f;
+    float texel = 16.0f;
+    while (texel * (float)COVER_N < need && texel < 4096.0f) texel *= 2.0f;
+    float span = texel * (float)COVER_N;
+    float ox = floorf(x / texel) * texel - span * 0.5f;
+    float oz = floorf(z / texel) * texel - span * 0.5f;
+    if (s->coverTexel != texel) {
+        CoverRebuild(s, ox, oz, texel);
+        return;
+    }
+    int dx = (int)floorf((ox - s->coverOriginX) / texel + 0.5f);
+    int dz = (int)floorf((oz - s->coverOriginZ) / texel + 0.5f);
+    if (dx == 0 && dz == 0) return;
+    if (dx >= COVER_N || dx <= -COVER_N || dz >= COVER_N || dz <= -COVER_N) CoverRebuild(s, ox, oz, texel);
+    else CoverScroll(s, ox, oz, dx, dz);
+}
+
+static void CoverInit(Scene* s)
+{
+    Image img = GenImageColor(COVER_N, COVER_N, (Color){ 0, 0, 0, 0 });
+    s->coverTex = LoadTextureFromImage(img);
+    UnloadImage(img);
+    SetTextureFilter(s->coverTex, TEXTURE_FILTER_BILINEAR);
+    SetTextureWrap(s->coverTex, TEXTURE_WRAP_CLAMP);
+    s->coverPx = (unsigned char*)MemAlloc(COVER_N * COVER_N * 4);
+    s->coverScratch = (unsigned char*)MemAlloc(COVER_N * COVER_N * 4);
+    s->coverTexel = 0.0f;
+    s->coverReady = (s->coverTex.id > 0 && s->coverPx && s->coverScratch);
+    if (!s->coverReady) return;
+    SetMaterialTexture(&s->groundMat, MATERIAL_MAP_DIFFUSE, s->coverTex);
+    CoverUpdate(s, s->balloon.x, s->balloon.z);
+}
+
 Scene* Scene_Create(void)
 {
     Scene* s = (Scene*)calloc(1, sizeof(Scene));
@@ -377,10 +477,12 @@ Scene* Scene_Create(void)
     }
     s->locEye = GetShaderLocation(s->groundMat.shader, "uEye");
     s->locWater = GetShaderLocation(s->groundMat.shader, "uWater");
+    s->locCoverMap = GetShaderLocation(s->groundMat.shader, "uCoverMap");
     if (s->locWater >= 0) {
         float water = TERRAIN_WATER;
         SetShaderValue(s->groundMat.shader, s->locWater, &water, SHADER_UNIFORM_FLOAT);
     }
+    if (s->locCoverMap >= 0) CoverInit(s);
     s->meshesReady = 1;
 
     Watch_Init(&s->watch);
@@ -402,6 +504,8 @@ void Scene_Destroy(Scene* s)
         UnloadMesh(s->sky);
         UnloadMaterial(s->groundMat);
         UnloadMaterial(s->material);
+        MemFree(s->coverPx);
+        MemFree(s->coverScratch);
     }
     Watch_Shutdown(&s->watch);
     if (s->audioReady) UnloadSound(s->burner);
@@ -1188,6 +1292,13 @@ void Scene_Draw(Scene* s, Vector3 eye)
     if (s->locEye >= 0) {
         float eye[2] = { s->balloon.x, s->balloon.z };
         SetShaderValue(s->groundMat.shader, s->locEye, eye, SHADER_UNIFORM_VEC2);
+    }
+    CoverUpdate(s, s->balloon.x, s->balloon.z);
+    if (s->locCoverMap >= 0 && s->coverReady) {
+        float map[4] = {
+            s->coverOriginX, s->coverOriginZ, s->coverTexel * (float)COVER_N, 0.0f
+        };
+        SetShaderValue(s->groundMat.shader, s->locCoverMap, map, SHADER_UNIFORM_VEC4);
     }
     for (int i = CLIP_LEVELS - 1; i >= 0; i--) {
         if (!s->clip[i].ready) continue;
