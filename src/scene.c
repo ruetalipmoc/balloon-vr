@@ -59,6 +59,9 @@ struct Scene {
     unsigned char* coverPx;
     unsigned char* coverScratch;
     float coverOriginX, coverOriginZ, coverTexel;
+    int coverShiftX, coverShiftY;
+    int coverJob;
+    float jobTexel, jobOriginX, jobOriginZ;
     int coverReady;
     int meshesReady;
 
@@ -347,15 +350,22 @@ static void MakeBurnerSound(Scene* s)
     s->audioReady = (s->burner.frameCount > 0);
 }
 
-/* World-space cover. One texel is the same colour on every ring, so the
- * join between rings cannot change brightness. */
+/* World-space cover. One texel is the same colour on every ring.
+ * The map is a torus: flying only repaints the strip that scrolled in,
+ * a few rows a frame, so a rescale never stops the view. */
 #define COVER_N 512
+#define COVER_ROWS 4
 
-static void CoverWrite(unsigned char* px, int i, int j, float ox, float oz, float texel)
+static int CoverMod(int v)
+{
+    int m = v % COVER_N;
+    return m < 0 ? m + COVER_N : m;
+}
+
+static void CoverStore(unsigned char* px, int i, int j, float x, float z)
 {
     float city, farm, forest, highland;
-    Terrain_Cover(ox + ((float)i + 0.5f) * texel, oz + ((float)j + 0.5f) * texel,
-                  &city, &farm, &forest, &highland);
+    Terrain_Cover(x, z, &city, &farm, &forest, &highland);
     int k = (j * COVER_N + i) * 4;
     px[k + 0] = (unsigned char)(Clampf(city, 0.0f, 1.0f) * 255.0f + 0.5f);
     px[k + 1] = (unsigned char)(Clampf(farm, 0.0f, 1.0f) * 255.0f + 0.5f);
@@ -363,66 +373,165 @@ static void CoverWrite(unsigned char* px, int i, int j, float ox, float oz, floa
     px[k + 3] = (unsigned char)(Clampf(highland, 0.0f, 1.0f) * 255.0f + 0.5f);
 }
 
-static void CoverUpload(Scene* s, float ox, float oz, float texel)
+static float CoverAxis(float base, float texel, int shift, int i)
 {
+    float span = texel * (float)COVER_N;
+    float z = base + ((float)i + 0.5f) * texel;
+    float win = base + (float)shift * texel;
+    float k = ceilf((win - z) / span);
+    return z + k * span;
+}
+
+static void CoverUploadColumn(Scene* s, int col)
+{
+    unsigned char line[COVER_N * 4];
+    for (int j = 0; j < COVER_N; j++) {
+        memcpy(line + j * 4, s->coverPx + (j * COVER_N + col) * 4, 4);
+    }
+    Rectangle rec = { (float)col, 0.0f, 1.0f, (float)COVER_N };
+    UpdateTextureRec(s->coverTex, rec, line);
+}
+
+static void CoverUploadRow(Scene* s, int row)
+{
+    Rectangle rec = { 0.0f, (float)row, (float)COVER_N, 1.0f };
+    UpdateTextureRec(s->coverTex, rec, s->coverPx + row * COVER_N * 4);
+}
+
+static void CoverStepX(Scene* s, int dir)
+{
+    float texel = s->coverTexel;
+    int col;
+    float wx;
+    if (dir > 0) {
+        col = CoverMod(s->coverShiftX);
+        wx = s->coverOriginX + ((float)s->coverShiftX + (float)COVER_N + 0.5f) * texel;
+    } else {
+        col = CoverMod(s->coverShiftX - 1);
+        wx = s->coverOriginX + ((float)s->coverShiftX - 1.0f + 0.5f) * texel;
+    }
+    for (int j = 0; j < COVER_N; j++) {
+        float wz = CoverAxis(s->coverOriginZ, texel, s->coverShiftY, j);
+        CoverStore(s->coverPx, col, j, wx, wz);
+    }
+    CoverUploadColumn(s, col);
+    s->coverShiftX += dir;
+}
+
+static void CoverStepZ(Scene* s, int dir)
+{
+    float texel = s->coverTexel;
+    int row;
+    float wz;
+    if (dir > 0) {
+        row = CoverMod(s->coverShiftY);
+        wz = s->coverOriginZ + ((float)s->coverShiftY + (float)COVER_N + 0.5f) * texel;
+    } else {
+        row = CoverMod(s->coverShiftY - 1);
+        wz = s->coverOriginZ + ((float)s->coverShiftY - 1.0f + 0.5f) * texel;
+    }
+    for (int i = 0; i < COVER_N; i++) {
+        float wx = CoverAxis(s->coverOriginX, texel, s->coverShiftX, i);
+        CoverStore(s->coverPx, i, row, wx, wz);
+    }
+    CoverUploadRow(s, row);
+    s->coverShiftY += dir;
+}
+
+static void CoverFillAll(Scene* s, float ox, float oz, float texel)
+{
+    for (int j = 0; j < COVER_N; j++) {
+        float wz = oz + ((float)j + 0.5f) * texel;
+        for (int i = 0; i < COVER_N; i++) {
+            CoverStore(s->coverPx, i, j, ox + ((float)i + 0.5f) * texel, wz);
+        }
+    }
     UpdateTexture(s->coverTex, s->coverPx);
     s->coverOriginX = ox;
     s->coverOriginZ = oz;
     s->coverTexel = texel;
+    s->coverShiftX = 0;
+    s->coverShiftY = 0;
+    s->coverJob = 0;
 }
 
-static void CoverRebuild(Scene* s, float ox, float oz, float texel)
+static void CoverStartJob(Scene* s, float ox, float oz, float texel)
 {
-    for (int j = 0; j < COVER_N; j++) {
-        for (int i = 0; i < COVER_N; i++) CoverWrite(s->coverPx, i, j, ox, oz, texel);
-    }
-    CoverUpload(s, ox, oz, texel);
+    if (s->coverJob && s->jobTexel == texel && s->jobOriginX == ox && s->jobOriginZ == oz) return;
+    s->coverJob = 1;
+    s->jobTexel = texel;
+    s->jobOriginX = ox;
+    s->jobOriginZ = oz;
 }
 
-static void CoverScroll(Scene* s, float ox, float oz, int dx, int dz)
+static void CoverAdvanceJob(Scene* s)
 {
-    unsigned char* src = s->coverPx;
-    unsigned char* dst = s->coverScratch;
-    float texel = s->coverTexel;
-    for (int j = 0; j < COVER_N; j++) {
-        int sj = j + dz;
+    if (!s->coverJob) return;
+    int row0 = s->coverJob - 1;
+    int row1 = row0 + COVER_ROWS;
+    if (row1 > COVER_N) row1 = COVER_N;
+    for (int j = row0; j < row1; j++) {
+        float wz = s->jobOriginZ + ((float)j + 0.5f) * s->jobTexel;
         for (int i = 0; i < COVER_N; i++) {
-            int si = i + dx;
-            if (si >= 0 && si < COVER_N && sj >= 0 && sj < COVER_N) {
-                int dk = (j * COVER_N + i) * 4;
-                int sk = (sj * COVER_N + si) * 4;
-                dst[dk + 0] = src[sk + 0];
-                dst[dk + 1] = src[sk + 1];
-                dst[dk + 2] = src[sk + 2];
-                dst[dk + 3] = src[sk + 3];
-            } else {
-                CoverWrite(dst, i, j, ox, oz, texel);
-            }
+            CoverStore(s->coverScratch, i, j, s->jobOriginX + ((float)i + 0.5f) * s->jobTexel, wz);
         }
     }
-    s->coverScratch = src;
-    s->coverPx = dst;
-    CoverUpload(s, ox, oz, texel);
+    if (row1 < COVER_N) {
+        s->coverJob = row1 + 1;
+        return;
+    }
+    unsigned char* tmp = s->coverPx;
+    s->coverPx = s->coverScratch;
+    s->coverScratch = tmp;
+    UpdateTexture(s->coverTex, s->coverPx);
+    s->coverOriginX = s->jobOriginX;
+    s->coverOriginZ = s->jobOriginZ;
+    s->coverTexel = s->jobTexel;
+    s->coverShiftX = 0;
+    s->coverShiftY = 0;
+    s->coverJob = 0;
 }
 
 static void CoverUpdate(Scene* s, float x, float z)
 {
     if (!s->coverReady) return;
+    if (s->coverJob) {
+        CoverAdvanceJob(s);
+        return;
+    }
     float need = Terrain_OuterRadius() * 2.4f;
     float texel = 16.0f;
     while (texel * (float)COVER_N < need && texel < 4096.0f) texel *= 2.0f;
     float span = texel * (float)COVER_N;
     float ox = floorf(x / texel) * texel - span * 0.5f;
     float oz = floorf(z / texel) * texel - span * 0.5f;
-    if (s->coverTexel != texel) {
-        CoverRebuild(s, ox, oz, texel);
+    if (s->coverTexel == 0.0f) {
+        CoverFillAll(s, ox, oz, texel);
         return;
     }
-    int dx = (int)floorf((ox - s->coverOriginX) / texel + 0.5f);
-    int dz = (int)floorf((oz - s->coverOriginZ) / texel + 0.5f);
-    if (dx == 0 && dz == 0) return;
-    if (dx >= COVER_N || dx <= -COVER_N || dz >= COVER_N || dz <= -COVER_N) CoverRebuild(s, ox, oz, texel);
-    else CoverScroll(s, ox, oz, dx, dz);
+    if (s->coverTexel != texel) {
+        CoverStartJob(s, ox, oz, texel);
+        CoverAdvanceJob(s);
+        return;
+    }
+    int wantX = (int)floorf((ox - s->coverOriginX) / texel + 0.5f);
+    int wantY = (int)floorf((oz - s->coverOriginZ) / texel + 0.5f);
+    if (wantX - s->coverShiftX >= COVER_N || s->coverShiftX - wantX >= COVER_N ||
+        wantY - s->coverShiftY >= COVER_N || s->coverShiftY - wantY >= COVER_N) {
+        CoverStartJob(s, ox, oz, texel);
+        CoverAdvanceJob(s);
+        return;
+    }
+    int guard = COVER_ROWS;
+    while (guard > 0 && s->coverShiftX != wantX) {
+        CoverStepX(s, s->coverShiftX < wantX ? 1 : -1);
+        guard--;
+    }
+    guard = COVER_ROWS;
+    while (guard > 0 && s->coverShiftY != wantY) {
+        CoverStepZ(s, s->coverShiftY < wantY ? 1 : -1);
+        guard--;
+    }
 }
 
 static void CoverInit(Scene* s)
@@ -431,10 +540,11 @@ static void CoverInit(Scene* s)
     s->coverTex = LoadTextureFromImage(img);
     UnloadImage(img);
     SetTextureFilter(s->coverTex, TEXTURE_FILTER_BILINEAR);
-    SetTextureWrap(s->coverTex, TEXTURE_WRAP_CLAMP);
+    SetTextureWrap(s->coverTex, TEXTURE_WRAP_REPEAT);
     s->coverPx = (unsigned char*)MemAlloc(COVER_N * COVER_N * 4);
     s->coverScratch = (unsigned char*)MemAlloc(COVER_N * COVER_N * 4);
     s->coverTexel = 0.0f;
+    s->coverJob = 0;
     s->coverReady = (s->coverTex.id > 0 && s->coverPx && s->coverScratch);
     if (!s->coverReady) return;
     SetMaterialTexture(&s->groundMat, MATERIAL_MAP_DIFFUSE, s->coverTex);

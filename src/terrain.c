@@ -71,19 +71,30 @@ typedef struct Land {
     float city, farm, forest, highland;
 } Land;
 
-/* One evaluation of every mask. Height, zone and colour all share it so a
- * river cannot drift off the blue bed, and a town cannot sit on a ridge. */
-static Land LandAt(float x, float z)
+/* Zone weights only. The cover map samples this, so it must not also cut
+ * rivers and ridges. */
+static void MasksAt(float x, float z, float* city, float* farm, float* forest, float* highland)
 {
     float elev = Fbm(x, z, 0.0016f, 1.0f, 3);
     float habit = Fbm(x + 1400.0f, z - 900.0f, 0.00125f, 1.0f, 3);
     float wet = Fbm(x - 500.0f, z + 700.0f, 0.0019f, 1.0f, 3);
+    float c = Ramp(habit, 0.57f, 0.66f) * Ramp(elev, 0.14f, 0.26f) * (1.0f - Ramp(elev, 0.68f, 0.80f));
+    float fa = Ramp(habit, 0.40f, 0.50f) * (1.0f - Ramp(habit, 0.62f, 0.72f));
+    fa *= Ramp(elev, 0.12f, 0.24f) * (1.0f - Ramp(elev, 0.58f, 0.70f)) * (1.0f - c);
+    float hi = Ramp(elev, 0.60f, 0.72f) * (1.0f - c);
+    float fo = Ramp(wet, 0.54f, 0.64f) * (1.0f - c) * (1.0f - fa) * (1.0f - hi);
+    *city = c;
+    *farm = fa;
+    *forest = fo;
+    *highland = hi;
+}
 
-    float city = Ramp(habit, 0.57f, 0.66f) * Ramp(elev, 0.14f, 0.26f) * (1.0f - Ramp(elev, 0.68f, 0.80f));
-    float farm = Ramp(habit, 0.40f, 0.50f) * (1.0f - Ramp(habit, 0.62f, 0.72f));
-    farm *= Ramp(elev, 0.12f, 0.24f) * (1.0f - Ramp(elev, 0.58f, 0.70f)) * (1.0f - city);
-    float highland = Ramp(elev, 0.60f, 0.72f) * (1.0f - city);
-    float forest = Ramp(wet, 0.54f, 0.64f) * (1.0f - city) * (1.0f - farm) * (1.0f - highland);
+/* One evaluation of every mask. Height, zone and colour all share it so a
+ * river cannot drift off the blue bed, and a town cannot sit on a ridge. */
+static Land LandAt(float x, float z)
+{
+    float city, farm, forest, highland;
+    MasksAt(x, z, &city, &farm, &forest, &highland);
 
     float macro = Fbm(x, z, 0.00115f, 1.0f, 3);
     float detail = Fbm(x + 80.0f, z - 40.0f, 0.0052f, 1.0f, 3);
@@ -147,11 +158,7 @@ int Terrain_Zone(float x, float z)
 
 void Terrain_Cover(float x, float z, float* city, float* farm, float* forest, float* highland)
 {
-    Land land = LandAt(x, z);
-    *city = land.city;
-    *farm = land.farm;
-    *forest = land.forest;
-    *highland = land.highland;
+    MasksAt(x, z, city, farm, forest, highland);
 }
 
 void Terrain_HeightCover(float x, float z, float* height, float* city, float* farm, float* forest, float* highland)

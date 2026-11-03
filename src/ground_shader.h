@@ -144,8 +144,8 @@ static const char GROUND_FS_330[] =
     "uniform sampler2D texture0;\n"
     "uniform vec4 uCoverMap;\n"
     "vec4 coverAt(vec2 xz) {\n"
-    "    vec2 uv = (xz - uCoverMap.xy) / max(uCoverMap.z, 1.0);\n"
-    "    return texture(texture0, clamp(uv, vec2(0.001), vec2(0.999)));\n"
+    "    vec2 uv = fract((xz - uCoverMap.xy) / max(uCoverMap.z, 1.0));\n"
+    "    return texture(texture0, uv);\n"
     "}\n"
     GROUND_FS_BODY
     "void main() {\n"
@@ -168,8 +168,8 @@ static const char GROUND_FS_100[] =
     "uniform sampler2D texture0;\n"
     "uniform vec4 uCoverMap;\n"
     "vec4 coverAt(vec2 xz) {\n"
-    "    vec2 uv = (xz - uCoverMap.xy) / max(uCoverMap.z, 1.0);\n"
-    "    return texture2D(texture0, clamp(uv, vec2(0.001), vec2(0.999)));\n"
+    "    vec2 uv = fract((xz - uCoverMap.xy) / max(uCoverMap.z, 1.0));\n"
+    "    return texture2D(texture0, uv);\n"
     "}\n"
     GROUND_FS_BODY
     "void main() {\n"
