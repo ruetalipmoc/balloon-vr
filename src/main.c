@@ -204,7 +204,8 @@ static void SaveScreenshot(void)
                 var url = URL.createObjectURL(blob);
                 var a = document.createElement("a");
                 a.href = url;
-                a.download = name.replace(/^.*\//, "");
+                var leaf = name.substring(name.lastIndexOf("/") + 1);
+                a.download = leaf;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
