@@ -551,14 +551,15 @@ static Color CSample(const Color* c, int stride, int n, int m, int i, int j)
     return c[j * stride + i];
 }
 
-/* Same lighting as the coarser ring: its vertices step by two fine cells. */
-static void CoarseNormal(const float* h, int stride, int n, int m, int i, int j, float step,
-                         float* nx, float* ny, float* nz)
+/* Same slope as the coarser ring, sampled past the edge so the border is
+ * not flatter than the ground it meets. */
+static void CoarseNormal(float wx, float wz, float step, float* nx, float* ny, float* nz)
 {
-    float hl = HSample(h, stride, n, m, i - 2, j);
-    float hr = HSample(h, stride, n, m, i + 2, j);
-    float hd = HSample(h, stride, n, m, i, j - 2);
-    float hu = HSample(h, stride, n, m, i, j + 2);
+    float e = 2.0f * step;
+    float hl = Terrain_Height(wx - e, wz);
+    float hr = Terrain_Height(wx + e, wz);
+    float hd = Terrain_Height(wx, wz - e);
+    float hu = Terrain_Height(wx, wz + e);
     float span = 4.0f * step;
     float dhx = (hl - hr) / span;
     float dhz = (hd - hu) / span;
@@ -572,7 +573,8 @@ static void CoarseNormal(const float* h, int stride, int n, int m, int i, int j,
  * The fine vertex flattens onto that plane, so the two rings are the same
  * surface where they meet. */
 static void CoarseSurface(const float* h, const Color* col, int stride, int n, int m,
-                          int ii, int jj, float s, float* hy, Color* c, float* nx, float* ny, float* nz)
+                          int ii, int jj, float x0, float z0, float s,
+                          float* hy, Color* c, float* nx, float* ny, float* nz)
 {
     int ci = ii & ~1;
     int cj = jj & ~1;
@@ -589,21 +591,21 @@ static void CoarseSurface(const float* h, const Color* col, int stride, int n, i
 
     float y0, y1, y2;
     Color k0, k1, k2;
-    float x0, z0, x1, z1, x2, z2;
+    float u0, v0, u1, v1, u2, v2;
     if (tx >= tz) {
         y0 = h00; y1 = h11; y2 = h10;
         k0 = c00; k1 = c11; k2 = c10;
-        x0 = 0.0f; z0 = 0.0f; x1 = 1.0f; z1 = 1.0f; x2 = 1.0f; z2 = 0.0f;
+        u0 = 0.0f; v0 = 0.0f; u1 = 1.0f; v1 = 1.0f; u2 = 1.0f; v2 = 0.0f;
     } else {
         y0 = h00; y1 = h01; y2 = h11;
         k0 = c00; k1 = c01; k2 = c11;
-        x0 = 0.0f; z0 = 0.0f; x1 = 0.0f; z1 = 1.0f; x2 = 1.0f; z2 = 1.0f;
+        u0 = 0.0f; v0 = 0.0f; u1 = 0.0f; v1 = 1.0f; u2 = 1.0f; v2 = 1.0f;
     }
-    float den = (z1 - z2) * (x0 - x2) + (x2 - x1) * (z0 - z2);
+    float den = (v1 - v2) * (u0 - u2) + (u2 - u1) * (v0 - v2);
     float w0 = 0.0f, w1 = 0.0f, w2 = 1.0f;
     if (fabsf(den) > 1.0e-6f) {
-        w0 = ((z1 - z2) * (tx - x2) + (x2 - x1) * (tz - z2)) / den;
-        w1 = ((z2 - z0) * (tx - x2) + (x0 - x2) * (tz - z2)) / den;
+        w0 = ((v1 - v2) * (tx - u2) + (u2 - u1) * (tz - v2)) / den;
+        w1 = ((v2 - v0) * (tx - u2) + (u0 - u2) * (tz - v2)) / den;
         w2 = 1.0f - w0 - w1;
     }
     *hy = y0 * w0 + y1 * w1 + y2 * w2;
@@ -619,9 +621,9 @@ static void CoarseSurface(const float* h, const Color* col, int stride, int n, i
         i0 = ci; j0 = cj; i1 = ci; j1 = cj + 2; i2 = ci + 2; j2 = cj + 2;
     }
     float n0x, n0y, n0z, n1x, n1y, n1z, n2x, n2y, n2z;
-    CoarseNormal(h, stride, n, m, i0, j0, s, &n0x, &n0y, &n0z);
-    CoarseNormal(h, stride, n, m, i1, j1, s, &n1x, &n1y, &n1z);
-    CoarseNormal(h, stride, n, m, i2, j2, s, &n2x, &n2y, &n2z);
+    CoarseNormal(x0 + (float)i0 * s, z0 + (float)j0 * s, s, &n0x, &n0y, &n0z);
+    CoarseNormal(x0 + (float)i1 * s, z0 + (float)j1 * s, s, &n1x, &n1y, &n1z);
+    CoarseNormal(x0 + (float)i2 * s, z0 + (float)j2 * s, s, &n2x, &n2y, &n2z);
     float nxw = n0x * w0 + n1x * w1 + n2x * w2;
     float nyw = n0y * w0 + n1y * w1 + n2y * w2;
     float nzw = n0z * w0 + n1z * w1 + n2z * w2;
@@ -631,22 +633,6 @@ static void CoarseSurface(const float* h, const Color* col, int stride, int n, i
     } else {
         *nx = nxw / len; *ny = nyw / len; *nz = nzw / len;
     }
-}
-
-static void Skirt(float* v, float* n, unsigned char* col, float* uv, int* gi,
-                  float x0, float y0, float z0, float x1, float y1, float z1,
-                  float nx, float ny, float nz, Color c0, Color c1)
-{
-    /* Just enough to cover a raster crack. A tall skirt reads as a band. */
-    const float drop = 1.2f;
-    int i = *gi;
-    PushVert(v, n, col, uv, i++, x0, y0, z0, nx, ny, nz, c0);
-    PushVert(v, n, col, uv, i++, x0, y0 - drop, z0, nx, ny, nz, c0);
-    PushVert(v, n, col, uv, i++, x1, y1 - drop, z1, nx, ny, nz, c1);
-    PushVert(v, n, col, uv, i++, x0, y0, z0, nx, ny, nz, c0);
-    PushVert(v, n, col, uv, i++, x1, y1 - drop, z1, nx, ny, nz, c1);
-    PushVert(v, n, col, uv, i++, x1, y1, z1, nx, ny, nz, c1);
-    *gi = i;
 }
 
 int Clip_Build(const ClipJob* job, Mesh* out)
@@ -734,7 +720,7 @@ int Clip_Build(const ClipJob* job, Mesh* out)
                         float hy;
                         float cnx, cny, cnz;
                         Color cc;
-                        CoarseSurface(h, col, stride, n, m, ii, jj, s, &hy, &cc, &cnx, &cny, &cnz);
+                        CoarseSurface(h, col, stride, n, m, ii, jj, x0, z0, s, &hy, &cc, &cnx, &cny, &cnz);
                         wy = wy + (hy - wy) * a;
                         nx = nx + (cnx - nx) * a;
                         ny = ny + (cny - ny) * a;
@@ -763,14 +749,6 @@ int Clip_Build(const ClipJob* job, Mesh* out)
                     gi++;
                 }
             }
-            if (job->morph && i == 0)
-                Skirt(gv, gn, gc, gu, &gi, px[0], py[0], pz[0], px[3], py[3], pz[3], pnx[0], pny[0], pnz[0], pc[0], pc[3]);
-            if (job->morph && i + 1 == n)
-                Skirt(gv, gn, gc, gu, &gi, px[1], py[1], pz[1], px[2], py[2], pz[2], pnx[1], pny[1], pnz[1], pc[1], pc[2]);
-            if (job->morph && j == 0)
-                Skirt(gv, gn, gc, gu, &gi, px[0], py[0], pz[0], px[1], py[1], pz[1], pnx[0], pny[0], pnz[0], pc[0], pc[1]);
-            if (job->morph && j + 1 == m)
-                Skirt(gv, gn, gc, gu, &gi, px[3], py[3], pz[3], px[2], py[2], pz[2], pnx[3], pny[3], pnz[3], pc[3], pc[2]);
         }
     }
     MemFree(h);
