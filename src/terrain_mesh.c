@@ -494,9 +494,8 @@ void Clip_Describe(int level, float viewX, float viewZ, ClipJob* job)
         job->seamR = job->holeR;
         job->seamB = job->holeB;
         job->seamT = job->holeT;
-        /* The coarser quads run a little under the finer ring so a raster
-         * crack cannot show the sky. The underlap is lowered slightly. */
-        float tuck = s * 0.55f;
+        /* The coarser quads run a full cell under the finer ring. */
+        float tuck = s;
         job->holeL += tuck;
         job->holeR -= tuck;
         job->holeB += tuck;
@@ -621,6 +620,20 @@ static void CoarseSurface(const float* h, const Color* col, int stride, int n, i
     }
 }
 
+static void Skirt(float* v, float* n, unsigned char* col, float* uv, int* gi,
+                  float x0, float y0, float z0, float x1, float y1, float z1, Color c0, Color c1)
+{
+    const float drop = 12.0f;
+    int i = *gi;
+    PushVert(v, n, col, uv, i++, x0, y0, z0, 0.0f, 1.0f, 0.0f, c0);
+    PushVert(v, n, col, uv, i++, x0, y0 - drop, z0, 0.0f, 1.0f, 0.0f, c0);
+    PushVert(v, n, col, uv, i++, x1, y1 - drop, z1, 0.0f, 1.0f, 0.0f, c1);
+    PushVert(v, n, col, uv, i++, x0, y0, z0, 0.0f, 1.0f, 0.0f, c0);
+    PushVert(v, n, col, uv, i++, x1, y1 - drop, z1, 0.0f, 1.0f, 0.0f, c1);
+    PushVert(v, n, col, uv, i++, x1, y1, z1, 0.0f, 1.0f, 0.0f, c1);
+    *gi = i;
+}
+
 int Clip_Build(const ClipJob* job, Mesh* out)
 {
     float s = job->spacing;
@@ -665,7 +678,7 @@ int Clip_Build(const ClipJob* job, Mesh* out)
         }
     }
 
-    int maxVerts = n * m * 6;
+    int maxVerts = n * m * 6 + (n + m) * 48;
     float* gv = (float*)MemAlloc((unsigned int)maxVerts * 3 * sizeof(float));
     float* gn = (float*)MemAlloc((unsigned int)maxVerts * 3 * sizeof(float));
     unsigned char* gc = (unsigned char*)MemAlloc((unsigned int)maxVerts * 4);
@@ -702,6 +715,11 @@ int Clip_Build(const ClipJob* job, Mesh* out)
                 Color c = col[jj * stride + ii];
                 if (job->morph) {
                     float a = MorphAlpha(wx, wz, job->viewX, job->viewZ, job->radius, job->level);
+                    /* The shared edge is exactly the coarser surface, not
+                     * almost. A partial blend there opens a crack. */
+                    float edge = s * 1.5f;
+                    if (wx - x0 < edge || x1 - wx < edge || wz - z0 < edge || z1 - wz < edge)
+                        a = 1.0f;
                     if (a > 0.0f) {
                         float hy;
                         float cnx, cny, cnz;
@@ -720,10 +738,6 @@ int Clip_Build(const ClipJob* job, Mesh* out)
                         }
                     }
                 }
-                if (job->hasHole && wx > job->seamL && wx < job->seamR
-                    && wz > job->seamB && wz < job->seamT) {
-                    wy -= 0.04f;
-                }
                 px[k] = wx;
                 py[k] = wy;
                 pz[k] = wz;
@@ -739,6 +753,12 @@ int Clip_Build(const ClipJob* job, Mesh* out)
                     gi++;
                 }
             }
+            /* A short skirt under the outer edge. A one-pixel crack then
+             * shows ground, not the beige sky, and it cannot flicker. */
+            if (i == 0) Skirt(gv, gn, gc, gu, &gi, px[0], py[0], pz[0], px[3], py[3], pz[3], pc[0], pc[3]);
+            if (i + 1 == n) Skirt(gv, gn, gc, gu, &gi, px[1], py[1], pz[1], px[2], py[2], pz[2], pc[1], pc[2]);
+            if (j == 0) Skirt(gv, gn, gc, gu, &gi, px[0], py[0], pz[0], px[1], py[1], pz[1], pc[0], pc[1]);
+            if (j + 1 == m) Skirt(gv, gn, gc, gu, &gi, px[3], py[3], pz[3], px[2], py[2], pz[2], pc[3], pc[2]);
         }
     }
     MemFree(h);

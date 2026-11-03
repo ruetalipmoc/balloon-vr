@@ -263,8 +263,8 @@ static Mesh MakeCrown(void)
 
 static Mesh MakeSky(void)
 {
-    const int stacks = 7;
-    const int slices = 14;
+    const int stacks = 28;
+    const int slices = 64;
     float radius = 8000.0f;
     int verts = stacks * slices * 6;
     float* v = (float*)MemAlloc((unsigned int)verts * 3 * sizeof(float));
@@ -297,14 +297,11 @@ static Mesh MakeSky(void)
             Vector3 b = { cosf(a1) * r0, y0, sinf(a1) * r0 };
             Vector3 d = { cosf(a1) * r1, y1, sinf(a1) * r1 };
             Vector3 e = { cosf(a0) * r1, y1, sinf(a0) * r1 };
-            Vector3 na = Vector3Normalize(Vector3Negate(a));
-            Vector3 nb = Vector3Normalize(Vector3Negate(b));
-            Vector3 nd = Vector3Normalize(Vector3Negate(d));
-            Vector3 ne = Vector3Normalize(Vector3Negate(e));
-            /* Inward winding. Colours are stored on the vertices so the two
-             * bands that share a ring interpolate the same gradient. */
-            PushTriN(v, n, c, uv, &i, a, e, d, na, ne, nd, c0, c1, c1);
-            PushTriN(v, n, c, uv, &i, a, d, b, na, nd, nb, c0, c1, c0);
+            Vector3 flat = { 0.0f, 1.0f, 0.0f };
+            /* One normal everywhere, so the colour bands do not catch a
+             * light and draw a circle. */
+            PushTriN(v, n, c, uv, &i, a, e, d, flat, flat, flat, c0, c1, c1);
+            PushTriN(v, n, c, uv, &i, a, d, b, flat, flat, flat, c0, c1, c0);
         }
     }
     return MakeFlatMesh(i, v, n, c, uv);
