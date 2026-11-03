@@ -54,7 +54,7 @@ void Watch_Shutdown(Watch* w)
     w->ready = 0;
 }
 
-void Watch_UpdatePage(Watch* w, float stickX, int confirm, int keyDelta, int forcePage)
+void Watch_UpdatePage(Watch* w, float stickX, int trigger, int watchOn, int keyDelta, int forcePage)
 {
     if (!w->ready) return;
     if (forcePage >= 0 && forcePage <= 2) {
@@ -68,8 +68,10 @@ void Watch_UpdatePage(Watch* w, float stickX, int confirm, int keyDelta, int for
         if (step != 0) w->page = (w->page + step + 3) % 3;
     }
     w->prevStickX = stickX;
-    if (w->page == 2 && confirm && !w->clickWas) w->resetRequest = 1;
-    w->clickWas = confirm;
+    /* The trigger confirms only while the face is up. A hold that started
+     * while it was hidden does not fire when the face appears. */
+    if (w->page == 2 && trigger && watchOn && !w->clickWas) w->resetRequest = 1;
+    w->clickWas = trigger ? 1 : 0;
 }
 
 int Watch_TakeReset(Watch* w)
@@ -227,6 +229,16 @@ static int FaceTowardEye(Vector3 handPos, Quaternion q, Vector3 eye)
     if (g_watchVisible) g_watchVisible = tilt < 0.58f && facing > 0.35f;
     else g_watchVisible = tilt < 0.42f && facing > 0.55f;
     return g_watchVisible;
+}
+
+int Watch_IsVisible(void)
+{
+    return g_watchVisible;
+}
+
+void Watch_Hide(void)
+{
+    g_watchVisible = 0;
 }
 
 void Watch_Draw(const Watch* w, Vector3 handPos, Quaternion q, Vector3 eye)

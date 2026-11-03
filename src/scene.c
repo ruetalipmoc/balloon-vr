@@ -14,6 +14,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef GL_POLYGON_OFFSET_FILL
+#define GL_POLYGON_OFFSET_FILL 0x8037
+#endif
+extern void glEnable(unsigned int cap);
+extern void glDisable(unsigned int cap);
+extern void glPolygonOffset(float factor, float units);
+
 /* Clipmap rings replace the old chunk slots. */
 #define MAX_PARTICLES 192
 #define MAX_PROPS 768
@@ -520,8 +527,10 @@ void Scene_Update(Scene* s, const HandInput hands[2], float dt, int keyBurner, i
     int delta = 0;
     if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_V)) delta = 1;
     else if (IsKeyPressed(KEY_LEFT)) delta = -1;
-    int confirm = hands[0].trigger || IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE);
-    Watch_UpdatePage(&s->watch, hands[0].stickX, confirm, delta, force);
+    int keyConfirm = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE);
+    int trigger = hands[0].trigger || keyConfirm;
+    int watchOn = Watch_IsVisible() || keyConfirm;
+    Watch_UpdatePage(&s->watch, hands[0].stickX, trigger, watchOn, delta, force);
     if (Watch_TakeReset(&s->watch)) s->resetView = 1;
     Watch_Render(&s->watch, &s->balloon, s->groundY);
 }
@@ -1190,10 +1199,19 @@ void Scene_Draw(Scene* s, Vector3 eye)
         float eye[2] = { s->balloon.x, s->balloon.z };
         SetShaderValue(s->groundMat.shader, s->locEye, eye, SHADER_UNIFORM_VEC2);
     }
+    rlDrawRenderBatchActive();
+    glEnable(GL_POLYGON_OFFSET_FILL);
     for (int i = CLIP_LEVELS - 1; i >= 0; i--) {
         if (!s->clip[i].ready) continue;
+        /* Coarser rings sit a little further back, so where they overlap
+         * the seam the finer ring wins and the sky cannot show through. */
+        glPolygonOffset(0.0f, (float)(i + 1));
+        rlDrawRenderBatchActive();
         DrawMesh(s->clip[i].mesh, s->groundMat, MatrixIdentity());
     }
+    rlDrawRenderBatchActive();
+    glPolygonOffset(0.0f, 0.0f);
+    glDisable(GL_POLYGON_OFFSET_FILL);
     for (int p = 0; p < s->propCount; p++) DrawProp(&s->props[p]);
     /* Clouds are scenery. They must not hide the gondola when the balloon
      * climbs through their layer, or the posts draw on top of a missing floor. */
@@ -1243,5 +1261,7 @@ void Scene_Draw(Scene* s, Vector3 eye)
         Quaternion q = { s->lastHands[0].qx, s->lastHands[0].qy, s->lastHands[0].qz, s->lastHands[0].qw };
         Vector3 p = { s->lastHands[0].x, s->lastHands[0].y, s->lastHands[0].z };
         Watch_Draw(&s->watch, p, q, eye);
+    } else {
+        Watch_Hide();
     }
 }

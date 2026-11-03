@@ -460,9 +460,9 @@ static float MorphAlpha(float x, float z, float viewX, float viewZ, float outer,
     if (a < 0.0f) a = 0.0f;
     if (a > 1.0f) a = 1.0f;
     a = a * a * (3.0f - 2.0f * a);
-    /* The vertices that sit on the shared edge have to be fully coarse,
-     * or the next ring does not meet them. */
-    if (edgeDist < spacing * 0.75f) a = 1.0f;
+    /* Only the shared edge itself is forced coarse. A wider snap drew a
+     * hard square one cell inside the ring. */
+    if (edgeDist < spacing * 0.2f) a = 1.0f;
     return a;
 }
 
@@ -491,6 +491,13 @@ void Clip_Describe(int level, float viewX, float viewZ, ClipJob* job)
         job->holeB = floorf((cz0 - half0) / s + 1.0e-4f) * s;
         job->holeT = ceilf((cz0 + half0) / s - 1.0e-4f) * s;
         job->hasHole = 1;
+        /* Pull the hole in by just over half a cell. The coarser quads then
+         * run under the finer ring, which covers the hairline crack. */
+        float tuck = s * 0.55f;
+        job->holeL += tuck;
+        job->holeR -= tuck;
+        job->holeB += tuck;
+        job->holeT -= tuck;
     }
     if (level + 1 < rings) {
         float S = Terrain_RingSpacing(level + 1);

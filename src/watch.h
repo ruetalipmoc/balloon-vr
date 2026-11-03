@@ -21,13 +21,18 @@ typedef struct Watch {
 void Watch_Init(Watch* w);
 void Watch_Shutdown(Watch* w);
 
-/* `confirm` is the trigger (or a desktop key) on the menu page. */
-void Watch_UpdatePage(Watch* w, float stickX, int confirm, int keyDelta, int forcePage);
+/* `trigger` is the index trigger. It confirms only while `watchOn` is set.
+ * A desktop key confirms either way. */
+void Watch_UpdatePage(Watch* w, float stickX, int trigger, int watchOn, int keyDelta, int forcePage);
 
 /* 1 once, when the menu's reset button was pressed. */
 int Watch_TakeReset(Watch* w);
 
 void Watch_Render(Watch* w, const Balloon* balloon, float groundY);
+
+/* 1 when the left wrist is held up to be read. Updated by Watch_Draw. */
+int Watch_IsVisible(void);
+void Watch_Hide(void);
 
 /* Draws nothing unless the forearm is horizontal and the back of the hand
  * points at `eye`. `q` is the left grip pose: +Y comes out of the back of
