@@ -306,8 +306,8 @@ static void PrintUsage(void)
     printf("           It grows with altitude, and a coarse copy of the real\n");
     printf("           ground always continues out to the horizon.\n");
     printf("  --lod    Four ascending distances, in metres, where detail drops\n");
-    printf("           at %.0f m AGL (default 100,200,340,520). They stretch\n", TERRAIN_ALT_REF);
-    printf("           with altitude, up to a cap so the fine mesh stays cheap.\n");
+    printf("           at %.0f m AGL (default 100,200,340,520). They follow the\n", TERRAIN_ALT_REF);
+    printf("           look angle as you climb, so the ground ahead stays fine.\n");
     printf("           A step narrower than a chunk (64 m) changes more abruptly.\n");
 }
 

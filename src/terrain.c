@@ -189,17 +189,6 @@ static float g_baseLod[4] = { 100.0f, 200.0f, 340.0f, 520.0f };
 static float g_viewDistance = TERRAIN_VIEW_DEFAULT;
 static float g_lod[4] = { 100.0f, 200.0f, 340.0f, 520.0f };
 
-/* Fine grids are expensive, so a band stops growing once it would cover
- * more ground than we want to tessellate. The cap is never below the
- * distance typed on the command line. */
-static float BandCap(float base, float rel, float absCap)
-{
-    float cap = base * rel;
-    if (cap > absCap) cap = absCap;
-    if (cap < base) cap = base;
-    return cap;
-}
-
 static float SnapGrown(float grown, float base)
 {
     if (grown <= base + 0.5f) return base;
@@ -230,25 +219,45 @@ void Terrain_SetLodThresholds(float d0, float d1, float d2, float d3)
     g_baseLod[3] = g_lod[3] = d3;
 }
 
+/* Horizontal distance at which the ground lies `degrees` under the horizon. */
+static float DistBelowHorizon(float agl, float degrees)
+{
+    float t = tanf(degrees * 0.0174532925f);
+    if (t < 0.05f) t = 0.05f;
+    return agl / t;
+}
+
 void Terrain_ApplyAltitude(float agl)
 {
     if (agl < 0.0f) agl = 0.0f;
-    float scale = agl / TERRAIN_ALT_REF;
-    if (scale < 1.0f) scale = 1.0f;
+    /* At or below the reference the typed distances are exact. */
+    if (agl <= TERRAIN_ALT_REF) {
+        g_viewDistance = g_baseView;
+        for (int i = 0; i < 4; i++) g_lod[i] = g_baseLod[i];
+        return;
+    }
 
-    float caps[4] = {
-        BandCap(g_baseLod[0], 4.0f, 320.0f),
-        BandCap(g_baseLod[1], 4.0f, 640.0f),
-        BandCap(g_baseLod[2], 4.0f, 1100.0f),
-        BandCap(g_baseLod[3], 4.0f, 1500.0f)
-    };
+    float scale = agl / TERRAIN_ALT_REF;
     float view = g_baseView * scale;
     if (view > TERRAIN_VIEW_MAX) view = TERRAIN_VIEW_MAX;
     g_viewDistance = SnapGrown(view, g_baseView);
 
+    /* Same glance from higher up lands further away, so the mesh has to
+     * stay fine out there or fields and streets turn into big diamonds.
+     * 32° is a look down at the near ground (4 m cells, capped).
+     * 16° is the view over the rail (8 m cells). Past that the cells may
+     * grow, and the colour is flattened so the diagonals do not show. */
+    float want[4] = {
+        DistBelowHorizon(agl, 32.0f),
+        DistBelowHorizon(agl, 16.0f),
+        DistBelowHorizon(agl, 8.0f),
+        DistBelowHorizon(agl, 4.0f)
+    };
+    float cap[4] = { 512.0f, 1280.0f, g_viewDistance, g_viewDistance };
     for (int i = 0; i < 4; i++) {
-        float d = g_baseLod[i] * scale;
-        if (d > caps[i]) d = caps[i];
+        float d = want[i];
+        if (d < g_baseLod[i]) d = g_baseLod[i];
+        if (d > cap[i]) d = cap[i];
         g_lod[i] = SnapGrown(d, g_baseLod[i]);
     }
     for (int i = 1; i < 4; i++) {

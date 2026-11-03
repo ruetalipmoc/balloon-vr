@@ -215,10 +215,18 @@ static void TestAltitude(void)
     CHECK(Terrain_LodForDistance(Terrain_LodThreshold(0) - 1.0f) == 0);
     CHECK(Terrain_LodForDistance(Terrain_LodThreshold(0) + 1.0f) == 1);
 
+    Terrain_ApplyAltitude(360.0f);
+    CHECK(Terrain_LodThreshold(0) > 400.0f);
+    CHECK(Terrain_LodThreshold(0) <= 512.0f + 0.1f);
+    /* The look over the rail has to stay on the 8 m mesh, or streets and
+     * hedges turn into diamonds. */
+    CHECK(Terrain_LodThreshold(1) > 900.0f);
+
     Terrain_ApplyAltitude(800.0f);
     CHECK(fabsf(Terrain_ViewDistance() - TERRAIN_VIEW_MAX) < 0.1f);
-    CHECK(Terrain_LodThreshold(0) <= 320.0f + 0.1f);
-    CHECK(Terrain_LodThreshold(3) <= 1536.0f);
+    CHECK(Terrain_LodThreshold(0) <= 512.0f + 0.1f);
+    CHECK(Terrain_LodThreshold(1) > Terrain_LodThreshold(0));
+    CHECK(Terrain_LodThreshold(3) >= Terrain_LodThreshold(2));
 
     /* Back to the reference, so later checks see the typed distances. */
     Terrain_ApplyAltitude(0.0f);

@@ -30,7 +30,7 @@ static Color LerpColor(Color a, Color b, float t)
 
 static Color ApplyHaze(Color c, float fog);
 
-static Color GroundColor(float x, float z, float h, float slopeY, float fog)
+static Color GroundColor(float x, float z, float h, float slopeY, float fog, float step)
 {
     Color grassA = { 86, 166, 74, 255 };
     Color grassB = { 58, 132, 62, 255 };
@@ -54,7 +54,12 @@ static Color GroundColor(float x, float z, float h, float slopeY, float fog)
         { 150, 156, 162, 255 }
     };
 
-    float patch = (float)(CellHash((int)floorf(x * 0.07f), (int)floorf(z * 0.07f)) & 255) / 255.0f;
+    /* A coarse quad cannot draw a hedge or a street. Sampling those thin
+     * lines at its corners and interpolating paints a diamond across the
+     * cell, which reads as a tiled grid from the basket. */
+    int coarse = step >= 14.0f;
+    float freq = coarse ? (step >= 28.0f ? 0.012f : 0.03f) : 0.07f;
+    float patch = (float)(CellHash((int)floorf(x * freq), (int)floorf(z * freq)) & 255) / 255.0f;
     int zone = Terrain_Zone(x, z);
     Color c = LerpColor(grassA, grassB, patch);
 
@@ -66,11 +71,8 @@ static Color GroundColor(float x, float z, float h, float slopeY, float fog)
         float gz = floorf(z / TERRAIN_FIELD);
         float u = x / TERRAIN_FIELD - gx;
         float v = z / TERRAIN_FIELD - gz;
-        if (u < 0.07f || v < 0.07f) {
-            c = hedge;
-        } else {
-            c = crops[CellHash((int)gx, (int)gz) % 5u];
-        }
+        if (!coarse && (u < 0.07f || v < 0.07f)) c = hedge;
+        else c = crops[CellHash((int)gx, (int)gz) % 5u];
     }
 
     if (zone == TERRAIN_ZONE_CITY && h > TERRAIN_WATER + 1.0f) {
@@ -78,13 +80,9 @@ static Color GroundColor(float x, float z, float h, float slopeY, float fog)
         float bz = floorf(z / TERRAIN_CITY_BLOCK);
         float u = x / TERRAIN_CITY_BLOCK - bx;
         float v = z / TERRAIN_CITY_BLOCK - bz;
-        if (u < 0.18f || v < 0.18f) {
-            c = asphalt;
-        } else if ((CellHash((int)bx, (int)bz) % 11u) == 0u) {
-            c = LerpColor(grassA, grassB, 0.4f);
-        } else {
-            c = blocks[CellHash((int)bx + 3, (int)bz - 1) % 3u];
-        }
+        if (!coarse && (u < 0.18f || v < 0.18f)) c = asphalt;
+        else if ((CellHash((int)bx, (int)bz) % 11u) == 0u) c = LerpColor(grassA, grassB, 0.4f);
+        else c = blocks[CellHash((int)bx + 3, (int)bz - 1) % 3u];
     }
 
     if (zone != TERRAIN_ZONE_FARM && zone != TERRAIN_ZONE_CITY && h < TERRAIN_WATER + 2.4f && h >= TERRAIN_WATER) {
@@ -143,26 +141,26 @@ static float FogAmount(float dist)
     return 0.72f + 0.28f * s;
 }
 
-static void VertexShade(float x, float y, float z, float viewX, float viewZ,
+static void VertexShade(float x, float y, float z, float viewX, float viewZ, float step,
                         float* nx, float* ny, float* nz, Color* c)
 {
     Terrain_Normal(x, z, nx, ny, nz);
-    *c = GroundColor(x, z, y, *ny, FogAmount(hypotf(x - viewX, z - viewZ)));
+    *c = GroundColor(x, z, y, *ny, FogAmount(hypotf(x - viewX, z - viewZ)), step);
 }
 
 /* Border samples that were pulled onto a coarser edge inherit that edge's
  * colour and normal, so the two LODs shade as one surface. */
-static void SampleShade(const TerrainSample* s, float viewX, float viewZ,
+static void SampleShade(const TerrainSample* s, float viewX, float viewZ, float step,
                         float* nx, float* ny, float* nz, Color* c)
 {
     if (!s->snapped) {
-        VertexShade(s->x, s->y, s->z, viewX, viewZ, nx, ny, nz, c);
+        VertexShade(s->x, s->y, s->z, viewX, viewZ, step, nx, ny, nz, c);
         return;
     }
     float nax, nay, naz, nbx, nby, nbz;
     Color ca, cb;
-    VertexShade(s->ax, Terrain_Height(s->ax, s->az), s->az, viewX, viewZ, &nax, &nay, &naz, &ca);
-    VertexShade(s->bx, Terrain_Height(s->bx, s->bz), s->bz, viewX, viewZ, &nbx, &nby, &nbz, &cb);
+    VertexShade(s->ax, Terrain_Height(s->ax, s->az), s->az, viewX, viewZ, step, &nax, &nay, &naz, &ca);
+    VertexShade(s->bx, Terrain_Height(s->bx, s->bz), s->bz, viewX, viewZ, step, &nbx, &nby, &nbz, &cb);
     float vx = nax + (nbx - nax) * s->t;
     float vy = nay + (nby - nay) * s->t;
     float vz = naz + (nbz - naz) * s->t;
@@ -391,8 +389,8 @@ static void SkirtEdge(float* v, float* n, unsigned char* col, float* uv, int* i,
     TerrainSample b = Terrain_Sample(jx1, jz1, grid, x0, z0, size, cx, cz, viewX, viewZ);
     float nax, nay, naz, nbx, nby, nbz;
     Color ca, cb;
-    SampleShade(&a, viewX, viewZ, &nax, &nay, &naz, &ca);
-    SampleShade(&b, viewX, viewZ, &nbx, &nby, &nbz, &cb);
+    SampleShade(&a, viewX, viewZ, size / (float)grid, &nax, &nay, &naz, &ca);
+    SampleShade(&b, viewX, viewZ, size / (float)grid, &nbx, &nby, &nbz, &cb);
     AddSkirt(v, n, col, uv, i, a.x, a.y, a.z, b.x, b.y, b.z, nax, nay, naz, nbx, nby, nbz, ca, cb);
 }
 
@@ -434,8 +432,20 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
             };
             float nx[4], ny[4], nz[4];
             Color col[4];
+            float step = size / (float)grid;
             for (int k = 0; k < 4; k++)
-                SampleShade(&corner[k], viewX, viewZ, &nx[k], &ny[k], &nz[k], &col[k]);
+                SampleShade(&corner[k], viewX, viewZ, step, &nx[k], &ny[k], &nz[k], &col[k]);
+            /* A cell this coarse cannot carry a hedge or a street. One colour
+             * for the whole quad, taken at its middle, so the diagonal does
+             * not paint a diamond. */
+            if (step >= 14.0f) {
+                float mx = (corner[0].x + corner[2].x) * 0.5f;
+                float mz = (corner[0].z + corner[2].z) * 0.5f;
+                Color flat;
+                float fnx, fny, fnz;
+                VertexShade(mx, Terrain_Height(mx, mz), mz, viewX, viewZ, step, &fnx, &fny, &fnz, &flat);
+                col[0] = col[1] = col[2] = col[3] = flat;
+            }
             /* Winding faces up (right-handed Y-up). The other order is culled
              * from the basket, which sits above the mesh. */
             int tris[2][3] = { { 0, 2, 1 }, { 0, 3, 2 } };
@@ -569,7 +579,7 @@ typedef struct FarBuf {
     int cap;
 } FarBuf;
 
-static int FarPush(FarBuf* b, float x, float y, float z, float viewX, float viewZ)
+static int FarPush(FarBuf* b, float x, float y, float z, float viewX, float viewZ, float step, Color* forced)
 {
     if (b->count >= b->cap) {
         int cap = b->cap > 0 ? b->cap * 2 : 2048;
@@ -582,31 +592,47 @@ static int FarPush(FarBuf* b, float x, float y, float z, float viewX, float view
     }
     float nx, ny, nz;
     Terrain_Normal(x, z, &nx, &ny, &nz);
-    float fog = FogAmount(hypotf(x - viewX, z - viewZ));
-    Color col = GroundColor(x, z, y, ny, fog);
+    Color col;
+    if (forced) col = *forced;
+    else {
+        float fog = FogAmount(hypotf(x - viewX, z - viewZ));
+        col = GroundColor(x, z, y, ny, fog, step);
+    }
     PushVert(b->v, b->n, b->c, b->uv, b->count, x, y, z, nx, ny, nz, col);
     b->count++;
     return 1;
 }
 
 static void FarTri(FarBuf* b, float x0, float z0, float x1, float z1, float x2, float z2,
-                   float oL, float oR, float oB, float oT, float snap,
+                   float oL, float oR, float oB, float oT, float snap, float step,
                    float viewX, float viewZ)
 {
     float xs[3] = { x0, x1, x2 };
     float zs[3] = { z0, z1, z2 };
+    float ys[3];
+    for (int i = 0; i < 3; i++) ys[i] = BandHeight(xs[i], zs[i], oL, oR, oB, oT, snap);
+    Color shared;
+    Color* forced = NULL;
+    if (step >= 14.0f) {
+        float cx = (x0 + x1 + x2) / 3.0f;
+        float cz = (z0 + z1 + z2) / 3.0f;
+        float cy = BandHeight(cx, cz, oL, oR, oB, oT, snap);
+        float nx, ny, nz;
+        Terrain_Normal(cx, cz, &nx, &ny, &nz);
+        shared = GroundColor(cx, cy, cz, ny, FogAmount(hypotf(cx - viewX, cz - viewZ)), step);
+        forced = &shared;
+    }
     for (int i = 0; i < 3; i++) {
-        float y = BandHeight(xs[i], zs[i], oL, oR, oB, oT, snap);
-        if (!FarPush(b, xs[i], y, zs[i], viewX, viewZ)) return;
+        if (!FarPush(b, xs[i], ys[i], zs[i], viewX, viewZ, step, forced)) return;
     }
 }
 
 static void FarQuad(FarBuf* b, float x0, float z0, float x1, float z1,
-                    float oL, float oR, float oB, float oT, float snap,
+                    float oL, float oR, float oB, float oT, float snap, float step,
                     float viewX, float viewZ)
 {
-    FarTri(b, x0, z0, x1, z1, x1, z0, oL, oR, oB, oT, snap, viewX, viewZ);
-    FarTri(b, x0, z0, x0, z1, x1, z1, oL, oR, oB, oT, snap, viewX, viewZ);
+    FarTri(b, x0, z0, x1, z1, x1, z0, oL, oR, oB, oT, snap, step, viewX, viewZ);
+    FarTri(b, x0, z0, x0, z1, x1, z1, oL, oR, oB, oT, snap, step, viewX, viewZ);
 }
 
 static int CellInside(float x0, float x1, float z0, float z1,
@@ -629,7 +655,7 @@ static void FarFrame(FarBuf* b, float iL, float iR, float iB, float iT,
             float x1 = x + step;
             if (x1 > oR) x1 = oR;
             if (CellInside(x, x1, z, z1, iL, iR, iB, iT)) continue;
-            FarQuad(b, x, z, x1, z1, oL, oR, oB, oT, snap, viewX, viewZ);
+            FarQuad(b, x, z, x1, z1, oL, oR, oB, oT, snap, step, viewX, viewZ);
         }
     }
 }
