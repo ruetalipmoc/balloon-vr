@@ -193,6 +193,39 @@ static void TestLodConfig(void)
     CHECK(Terrain_LodForDistance(640.0f) == 4);
 }
 
+static void TestAltitude(void)
+{
+    Terrain_SetViewDistance(TERRAIN_VIEW_DEFAULT);
+    Terrain_SetLodThresholds(100.0f, 200.0f, 340.0f, 520.0f);
+
+    Terrain_ApplyAltitude(10.0f);
+    CHECK(fabsf(Terrain_ViewDistance() - TERRAIN_VIEW_DEFAULT) < 0.1f);
+    CHECK(fabsf(Terrain_LodThreshold(0) - 100.0f) < 0.1f);
+    CHECK(Terrain_LodForDistance(90.0f) == 0);
+    CHECK(Terrain_LodForDistance(150.0f) == 1);
+
+    Terrain_ApplyAltitude(TERRAIN_ALT_REF);
+    CHECK(fabsf(Terrain_LodThreshold(3) - 520.0f) < 0.1f);
+
+    Terrain_ApplyAltitude(80.0f);
+    CHECK(Terrain_ViewDistance() > TERRAIN_VIEW_DEFAULT + 32.0f);
+    CHECK(Terrain_LodThreshold(0) > 100.0f);
+    CHECK(Terrain_LodThreshold(1) > Terrain_LodThreshold(0));
+    CHECK(Terrain_LodThreshold(3) > Terrain_LodThreshold(2));
+    CHECK(Terrain_LodForDistance(Terrain_LodThreshold(0) - 1.0f) == 0);
+    CHECK(Terrain_LodForDistance(Terrain_LodThreshold(0) + 1.0f) == 1);
+
+    Terrain_ApplyAltitude(800.0f);
+    CHECK(fabsf(Terrain_ViewDistance() - TERRAIN_VIEW_MAX) < 0.1f);
+    CHECK(Terrain_LodThreshold(0) <= 320.0f + 0.1f);
+    CHECK(Terrain_LodThreshold(3) <= 1536.0f);
+
+    /* Back to the reference, so later checks see the typed distances. */
+    Terrain_ApplyAltitude(0.0f);
+    CHECK(fabsf(Terrain_LodThreshold(0) - 100.0f) < 0.1f);
+    CHECK(fabsf(Terrain_ViewDistance() - TERRAIN_VIEW_DEFAULT) < 0.1f);
+}
+
 int main(void)
 {
     TestWind();
@@ -201,6 +234,7 @@ int main(void)
     TestBalloon();
     TestHandles();
     TestLodConfig();
+    TestAltitude();
     if (g_fails) {
         fprintf(stderr, "%d check(s) failed\n", g_fails);
         return 1;

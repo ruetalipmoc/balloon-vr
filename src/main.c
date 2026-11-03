@@ -255,13 +255,14 @@ static void PrintUsage(void)
     printf("balloon-vr [--desktop] [--view METRES] [--lod D0,D1,D2,D3]\n");
     printf("  Headset: pull the red ceiling handle to burn, the green one to vent.\n");
     printf("  Desktop: mouse look, F/left mouse burns, G/right mouse vents.\n");
-    printf("  --view   Ground draw distance in metres (default %.0f, max %.0f).\n",
+    printf("  --view   How far the ground keeps its colour at %.0f m above\n", TERRAIN_ALT_REF);
+    printf("           the ground (default %.0f, detailed mesh max %.0f).\n",
            TERRAIN_VIEW_DEFAULT, TERRAIN_VIEW_MAX);
-    printf("           Past that, a coarse copy of the real ground continues\n");
-    printf("           to the horizon, so raising it shows detail further out.\n");
-    printf("           The detailed mesh itself stops at %.0f m.\n", TERRAIN_VIEW_MAX);
+    printf("           It grows with altitude, and a coarse copy of the real\n");
+    printf("           ground always continues out to the horizon.\n");
     printf("  --lod    Four ascending distances, in metres, where detail drops\n");
-    printf("           (default 100,200,340,520). Past the last, one quad per chunk.\n");
+    printf("           at %.0f m AGL (default 100,200,340,520). They stretch\n", TERRAIN_ALT_REF);
+    printf("           with altitude, up to a cap so the fine mesh stays cheap.\n");
     printf("           A step narrower than a chunk (64 m) changes more abruptly.\n");
 }
 
@@ -405,9 +406,12 @@ int main(int argc, char** argv)
         EndMode3D();
         DrawHint(0);
         const Balloon* balloon = Scene_Balloon(scene);
-        char hud[96];
-        snprintf(hud, sizeof(hud), "AGL %.0f m    V %+.1f m/s",
-                 balloon->altitude - Scene_Ground(scene), balloon->vy);
+        char hud[160];
+        snprintf(hud, sizeof(hud), "AGL %.0f m    V %+.1f m/s    view %.0f    lod %.0f/%.0f/%.0f/%.0f",
+                 balloon->altitude - Scene_Ground(scene), balloon->vy,
+                 Terrain_ViewDistance(),
+                 Terrain_LodThreshold(0), Terrain_LodThreshold(1),
+                 Terrain_LodThreshold(2), Terrain_LodThreshold(3));
         DrawText(hud, 16, 16, 20, (Color){ 240, 248, 246, 255 });
         const char* shot = getenv("BALLOON_SCREENSHOT");
         static int shotFrame = 0;

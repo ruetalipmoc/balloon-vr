@@ -38,17 +38,26 @@ float Terrain_GroundAt(float x, float z);
 #define TERRAIN_VIEW_DEFAULT (11.0f * TERRAIN_CHUNK_SIZE)
 #define TERRAIN_VIEW_MAX (24.0f * TERRAIN_CHUNK_SIZE)
 
+/* `--view` and `--lod` are the distances at this height above the ground.
+ * Higher up they stretch so a band stays at the same angle below the horizon. */
+#define TERRAIN_ALT_REF 40.0f
+
 int Terrain_LodForDistance(float distMeters);
 int Terrain_GridForLod(int lod);
 
-/* Clamp and store the draw distance. The haze fades across the same
- * fraction of it as the default 704 m view. Returns the applied value. */
+/* Clamp and store the draw distance used at TERRAIN_ALT_REF. The value
+ * actually used this frame may be larger once altitude is applied. */
 float Terrain_SetViewDistance(float meters);
 float Terrain_ViewDistance(void);
 
-/* Four ascending distances, in metres, where the mesh steps to the next
- * coarser grid. Past the last one every chunk is a single quad. */
+/* Four ascending distances, in metres, at TERRAIN_ALT_REF. */
 void Terrain_SetLodThresholds(float d0, float d1, float d2, float d3);
+
+/* Stretch the stored distances for this height above the ground. */
+void Terrain_ApplyAltitude(float agl);
+
+/* Effective threshold for band 0..3 (after altitude). */
+float Terrain_LodThreshold(int band);
 
 /* One grid sample. When it sits on the border with a coarser neighbour,
  * `snapped` is set and y lies on that neighbour's edge instead of the

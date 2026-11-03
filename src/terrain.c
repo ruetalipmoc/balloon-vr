@@ -184,13 +184,35 @@ float Terrain_GroundAt(float x, float z)
     return h;
 }
 
+static float g_baseView = TERRAIN_VIEW_DEFAULT;
+static float g_baseLod[4] = { 100.0f, 200.0f, 340.0f, 520.0f };
 static float g_viewDistance = TERRAIN_VIEW_DEFAULT;
 static float g_lod[4] = { 100.0f, 200.0f, 340.0f, 520.0f };
+
+/* Fine grids are expensive, so a band stops growing once it would cover
+ * more ground than we want to tessellate. The cap is never below the
+ * distance typed on the command line. */
+static float BandCap(float base, float rel, float absCap)
+{
+    float cap = base * rel;
+    if (cap > absCap) cap = absCap;
+    if (cap < base) cap = base;
+    return cap;
+}
+
+static float SnapGrown(float grown, float base)
+{
+    if (grown <= base + 0.5f) return base;
+    float s = floorf(grown / 32.0f + 0.5f) * 32.0f;
+    if (s < base) s = base;
+    return s;
+}
 
 float Terrain_SetViewDistance(float meters)
 {
     if (meters < TERRAIN_CHUNK_SIZE) meters = TERRAIN_CHUNK_SIZE;
     if (meters > TERRAIN_VIEW_MAX) meters = TERRAIN_VIEW_MAX;
+    g_baseView = meters;
     g_viewDistance = meters;
     return g_viewDistance;
 }
@@ -202,10 +224,43 @@ float Terrain_ViewDistance(void)
 
 void Terrain_SetLodThresholds(float d0, float d1, float d2, float d3)
 {
-    g_lod[0] = d0;
-    g_lod[1] = d1;
-    g_lod[2] = d2;
-    g_lod[3] = d3;
+    g_baseLod[0] = g_lod[0] = d0;
+    g_baseLod[1] = g_lod[1] = d1;
+    g_baseLod[2] = g_lod[2] = d2;
+    g_baseLod[3] = g_lod[3] = d3;
+}
+
+void Terrain_ApplyAltitude(float agl)
+{
+    if (agl < 0.0f) agl = 0.0f;
+    float scale = agl / TERRAIN_ALT_REF;
+    if (scale < 1.0f) scale = 1.0f;
+
+    float caps[4] = {
+        BandCap(g_baseLod[0], 4.0f, 320.0f),
+        BandCap(g_baseLod[1], 4.0f, 640.0f),
+        BandCap(g_baseLod[2], 4.0f, 1100.0f),
+        BandCap(g_baseLod[3], 4.0f, 1500.0f)
+    };
+    float view = g_baseView * scale;
+    if (view > TERRAIN_VIEW_MAX) view = TERRAIN_VIEW_MAX;
+    g_viewDistance = SnapGrown(view, g_baseView);
+
+    for (int i = 0; i < 4; i++) {
+        float d = g_baseLod[i] * scale;
+        if (d > caps[i]) d = caps[i];
+        g_lod[i] = SnapGrown(d, g_baseLod[i]);
+    }
+    for (int i = 1; i < 4; i++) {
+        if (g_lod[i] <= g_lod[i - 1]) g_lod[i] = g_lod[i - 1] + 32.0f;
+    }
+}
+
+float Terrain_LodThreshold(int band)
+{
+    if (band < 0) band = 0;
+    if (band > 3) band = 3;
+    return g_lod[band];
 }
 
 int Terrain_LodForDistance(float distMeters)

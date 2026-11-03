@@ -536,6 +536,9 @@ static int ChunkRadius(void)
 
 static void UpdateChunks(Scene* s)
 {
+    float agl = s->balloon.altitude - s->groundY;
+    Terrain_ApplyAltitude(agl);
+
     int ccx = (int)floorf(s->balloon.x / TERRAIN_CHUNK_SIZE);
     int ccz = (int)floorf(s->balloon.z / TERRAIN_CHUNK_SIZE);
     int radius = ChunkRadius();

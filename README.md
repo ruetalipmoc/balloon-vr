@@ -50,7 +50,7 @@ If no OpenXR runtime is running, the same simulation opens in a window.
 ./balloon-vr --desktop --view 500 --lod 80,160,280,420
 ```
 
-`--view` is how far the ground keeps its colour, in metres (default 704, detailed mesh capped at 1536). It does **not** stop at the last LOD step (520 m): a larger value keeps fields and forests readable further out. Past the detailed square a coarser copy of the same height field continues to the horizon, so altitude does not turn the world into a square island. `--lod` is four ascending distances where the mesh steps down (default `100,200,340,520`). Past the last one each detailed chunk is a single quad. A step narrower than one chunk (64 m) still joins, but the change is sharper.
+`--view` and `--lod` are the distances **at 40 m above the ground**. Climb and they stretch, so each band stays at about the same angle under the horizon; descend back to 40 m and they return to what you typed. The detailed mesh still stops at 1536 m, and the finest band stops growing around 320 m so the basket does not have to tessellate the whole disk. Past that square, the coarse height field continues to the horizon. `--lod` defaults to `100,200,340,520`. A step narrower than one chunk (64 m) still joins, but the change is sharper.
 
 The stage origin is recentered onto the middle of the basket floor the first
 time a head pose arrives. The basket is about 1.2 m by 1.0 m. Stay inside the
