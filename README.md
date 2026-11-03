@@ -30,14 +30,14 @@ If no OpenXR runtime is running, the same simulation opens in a window.
 
 | Input | Effect |
 | --- | --- |
-| Grip + pull red handle | Burner, climb |
-| Grip + pull green handle | Vent, descend |
+| Grip + pull red handle, or right controller **B** (upper, the Y of that hand) | Burner, climb |
+| Grip + pull green handle, or right controller **A** (lower, the X of that hand) | Vent, descend |
+| Left thumbstick left / right, or `Left` / `Right` / `V` | Previous / next watch page |
+| Trigger on the menu page, or `Enter` | Reset the view to standing in the basket (also `R`) |
 | `F` or left mouse (desktop) | Pull the red handle |
 | `G` or right mouse (desktop) | Pull the green handle |
 | Mouse (desktop, after a click) | Look around the basket |
 | Look down, or `C` (desktop). In the headset: left forearm level, back of the hand toward you | Show the watch |
-| Left thumbstick left / right, or `Left` / `Right` / `V` | Previous / next watch page |
-| Thumbstick click on the menu page, or `Enter` | Reset the view (also `R`) |
 | `Esc` | Quit |
 | `P` | Pause / resume the flight (look and the watch still work) |
 | `S` | Save a screenshot of the window (`/tmp/balloon-0001.png`, …) |

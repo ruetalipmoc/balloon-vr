@@ -1,7 +1,8 @@
 /* Futuristic wrist instrument. The face stays hidden until the left forearm
  * is about horizontal and the back of the hand is turned toward the eyes.
+ * That test uses only the wrist orientation, so it works anywhere in the basket.
  * Pages are flight, wind, then a menu. The left thumbstick changes page;
- * a stick click on the menu recenters the view. */
+ * the trigger confirms the menu. */
 #ifndef BALLOON_WATCH_H
 #define BALLOON_WATCH_H
 
@@ -20,9 +21,8 @@ typedef struct Watch {
 void Watch_Init(Watch* w);
 void Watch_Shutdown(Watch* w);
 
-/* `forcePage` is 0..2 to pin a page, or -1 to follow the left stick.
- * `keyDelta` is -1, 0 or +1 from a desktop key press this frame. */
-void Watch_UpdatePage(Watch* w, float stickX, int stickClick, int keyDelta, int forcePage);
+/* `confirm` is the trigger (or a desktop key) on the menu page. */
+void Watch_UpdatePage(Watch* w, float stickX, int confirm, int keyDelta, int forcePage);
 
 /* 1 once, when the menu's reset button was pressed. */
 int Watch_TakeReset(Watch* w);

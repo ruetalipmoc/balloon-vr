@@ -444,21 +444,25 @@ int FarField_Build(float viewX, float viewZ,
 /* Cell count lives in TERRAIN_CLIP_CELLS. Spacing and radius come from
  * Terrain_RingSpacing, so a climb widens every ring without adding vertices. */
 
-static float MorphAlpha(float x, float z, float L, float R, float B, float T)
+/* 0 in the middle of the ring, 1 where it must already be the coarser ring.
+ * The factor follows the distance to the basket, not the ring's rectangle,
+ * so recentering the window does not slide a band across the ground. */
+static float MorphAlpha(float x, float z, float viewX, float viewZ, float outer,
+                        float edgeDist, float spacing)
 {
-    float dx = x - L;
-    float dx2 = R - x;
-    if (dx2 < dx) dx = dx2;
-    float dz = z - B;
-    float dz2 = T - z;
-    if (dz2 < dz) dz = dz2;
-    float edge = dx < dz ? dx : dz;
-    float halfW = (R - L) * 0.5f;
-    float band = halfW * 0.30f;
-    if (band < 1.0f) band = 1.0f;
-    float a = 1.0f - edge / band;
+    float dx = fabsf(x - viewX);
+    float dz = fabsf(z - viewZ);
+    float cheb = dx > dz ? dx : dz;
+    float start = outer * 0.42f;
+    float span = outer - start;
+    if (span < 1.0f) span = 1.0f;
+    float a = (cheb - start) / span;
     if (a < 0.0f) a = 0.0f;
     if (a > 1.0f) a = 1.0f;
+    a = a * a * (3.0f - 2.0f * a);
+    /* The vertices that sit on the shared edge have to be fully coarse,
+     * or the next ring does not meet them. */
+    if (edgeDist < spacing * 0.75f) a = 1.0f;
     return a;
 }
 
@@ -475,6 +479,8 @@ void Clip_Describe(int level, float viewX, float viewZ, ClipJob* job)
     job->cx = cx;
     job->cz = cz;
     job->radius = half;
+    job->viewX = viewX;
+    job->viewZ = viewZ;
     if (level > 0) {
         float s0 = Terrain_RingSpacing(level - 1);
         float half0 = Terrain_RingRadius(level - 1);
@@ -604,7 +610,14 @@ int Clip_Build(const ClipJob* job, Mesh* out)
                 GridNormal(h, stride, ii, jj, n, m, s, &nx, &ny, &nz);
                 Color c = col[jj * stride + ii];
                 if (job->morph) {
-                    float a = MorphAlpha(wx, wz, job->boundL, job->boundR, job->boundB, job->boundT);
+                    float dxe = wx - job->boundL;
+                    float dxe2 = job->boundR - wx;
+                    if (dxe2 < dxe) dxe = dxe2;
+                    float dze = wz - job->boundB;
+                    float dze2 = job->boundT - wz;
+                    if (dze2 < dze) dze = dze2;
+                    float edgeDist = dxe < dze ? dxe : dze;
+                    float a = MorphAlpha(wx, wz, job->viewX, job->viewZ, job->radius, edgeDist, s);
                     int ci = ii & ~1;
                     int cj = jj & ~1;
                     if (a > 0.0f && (ci != ii || cj != jj)) {

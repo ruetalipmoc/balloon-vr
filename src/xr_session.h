@@ -27,7 +27,8 @@ void XR_Shutdown(void);
 int XR_IsSessionRunning(void);
 int XR_WantsQuit(void);
 
-/* Drop the next head pose onto the basket centre (XZ only). */
+/* Drop the next head pose onto a standing position in the basket:
+ * centred, eyes 1.62 m above the floor. */
 void XR_Recenter(void);
 
 /* 1: xrBeginFrame was called and XR_EndFrame is required.

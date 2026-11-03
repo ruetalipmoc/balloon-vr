@@ -14,6 +14,9 @@ typedef struct HandInput {
     float stickX;        /* -1..1, thumbstick or trackpad */
     float stickY;
     int stickClick;      /* thumbstick / trackpad press */
+    int trigger;         /* index trigger, used to confirm the watch menu */
+    int burnButton;      /* right-hand Y / B, held to burn */
+    int ventButton;      /* right-hand X / A, held to vent */
     float x, y, z;       /* metres, basket space */
     float qx, qy, qz, qw; /* orientation, identity if unused */
 } HandInput;

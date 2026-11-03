@@ -44,6 +44,7 @@ EM_JS(void, Balloon_ExposeControls, (), {
 #endif
 
 static int g_yawCaptured = 0;
+static int g_mouseBurnArmed = 0;
 static float g_yaw = 0.0f;
 static float g_pitch = 0.22f;
 
@@ -367,11 +368,17 @@ int main(int argc, char** argv)
 #endif
         int burn = IsKeyDown(KEY_F);
         int vent = IsKeyDown(KEY_G);
+#ifndef __EMSCRIPTEN__
+        if (!g_yawCaptured || IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+            if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) g_mouseBurnArmed = 1;
+            if (!g_yawCaptured) g_mouseBurnArmed = 0;
+        }
+#endif
 #ifdef __EMSCRIPTEN__
         burn = burn || g_webBurn;
         vent = vent || g_webVent || IsMouseButtonDown(MOUSE_BUTTON_RIGHT);
 #else
-        burn = burn || (!session && g_yawCaptured && IsMouseButtonDown(MOUSE_BUTTON_LEFT));
+        burn = burn || (!session && g_yawCaptured && g_mouseBurnArmed && IsMouseButtonDown(MOUSE_BUTTON_LEFT));
         vent = vent || (!session && g_yawCaptured && IsMouseButtonDown(MOUSE_BUTTON_RIGHT));
 #endif
         if (getenv("BALLOON_BURN")) burn = 1;
@@ -387,6 +394,8 @@ int main(int argc, char** argv)
         if (xr) {
             XrFrame frame;
             if (XR_BeginFrame(&frame)) {
+                burn = burn || frame.hands[1].burnButton;
+                vent = vent || frame.hands[1].ventButton;
                 Scene_Update(scene, frame.hands, g_paused ? 0.0f : frame.dt, burn, vent);
                 if (frame.shouldRender) {
                     for (int eye = 0; eye < frame.eyeCount; eye++) {

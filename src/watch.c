@@ -54,7 +54,7 @@ void Watch_Shutdown(Watch* w)
     w->ready = 0;
 }
 
-void Watch_UpdatePage(Watch* w, float stickX, int stickClick, int keyDelta, int forcePage)
+void Watch_UpdatePage(Watch* w, float stickX, int confirm, int keyDelta, int forcePage)
 {
     if (!w->ready) return;
     if (forcePage >= 0 && forcePage <= 2) {
@@ -68,8 +68,8 @@ void Watch_UpdatePage(Watch* w, float stickX, int stickClick, int keyDelta, int 
         if (step != 0) w->page = (w->page + step + 3) % 3;
     }
     w->prevStickX = stickX;
-    if (w->page == 2 && stickClick && !w->clickWas) w->resetRequest = 1;
-    w->clickWas = stickClick;
+    if (w->page == 2 && confirm && !w->clickWas) w->resetRequest = 1;
+    w->clickWas = confirm;
 }
 
 int Watch_TakeReset(Watch* w)
@@ -174,7 +174,7 @@ static void DrawMenu(void)
     const char* label = "RESET VIEW";
     int lw = MeasureText(label, 42);
     DrawText(label, (WATCH_SIZE - lw) / 2, by + 46, 42, paper);
-    const char* hint = "STICK CLICK";
+    const char* hint = "GACHETTE";
     int hw = MeasureText(hint, 22);
     DrawText(hint, (WATCH_SIZE - hw) / 2, by + 108, 22, dim);
 
@@ -215,7 +215,7 @@ static int FaceTowardEye(Vector3 handPos, Quaternion q, Vector3 eye)
     Vector3 forearm = Vector3RotateByQuaternion((Vector3){ 0, 0, 1 }, q);
     Vector3 toEye = Vector3Subtract(eye, handPos);
     float dist = Vector3Length(toEye);
-    if (dist < 0.08f || dist > 0.95f) {
+    if (dist < 0.05f) {
         g_watchVisible = 0;
         return 0;
     }
@@ -223,9 +223,9 @@ static int FaceTowardEye(Vector3 handPos, Quaternion q, Vector3 eye)
     float facing = Vector3DotProduct(back, toEye);
     float tilt = fabsf(forearm.y);
     /* Forearm near horizontal, back of the hand toward the face.
-     * A little hysteresis so it does not flicker on the threshold. */
-    if (g_watchVisible) g_watchVisible = tilt < 0.52f && facing > 0.48f;
-    else g_watchVisible = tilt < 0.36f && facing > 0.68f;
+     * No distance limit: the same gesture works anywhere in the basket. */
+    if (g_watchVisible) g_watchVisible = tilt < 0.58f && facing > 0.35f;
+    else g_watchVisible = tilt < 0.42f && facing > 0.55f;
     return g_watchVisible;
 }
 
@@ -234,16 +234,23 @@ void Watch_Draw(const Watch* w, Vector3 handPos, Quaternion q, Vector3 eye)
     if (!w->ready) return;
     if (!FaceTowardEye(handPos, q, eye)) return;
 
-    Vector3 right = Vector3RotateByQuaternion((Vector3){ 1, 0, 0 }, q);
     Vector3 back = Vector3RotateByQuaternion((Vector3){ 0, 1, 0 }, q);
-    Vector3 fingers = Vector3RotateByQuaternion((Vector3){ 0, 0, -1 }, q);
 
-    Vector3 pos = Vector3Add(handPos, Vector3Add(Vector3Scale(back, 0.09f), Vector3Scale(fingers, -0.01f)));
+    Vector3 faceUp = (Vector3){ 0, 1, 0 };
+    faceUp = Vector3Subtract(faceUp, Vector3Scale(back, Vector3DotProduct(faceUp, back)));
+    if (Vector3Length(faceUp) < 0.2f) {
+        faceUp = Vector3RotateByQuaternion((Vector3){ 0, 0, 1 }, q);
+        faceUp = Vector3Subtract(faceUp, Vector3Scale(back, Vector3DotProduct(faceUp, back)));
+    }
+    faceUp = Vector3Normalize(faceUp);
+    Vector3 faceRight = Vector3Normalize(Vector3CrossProduct(faceUp, back));
+
+    Vector3 pos = Vector3Add(handPos, Vector3Scale(back, 0.045f));
 
     Matrix m = { 0 };
-    m.m0 = right.x;   m.m1 = right.y;   m.m2 = right.z;
-    m.m4 = fingers.x; m.m5 = fingers.y; m.m6 = fingers.z;
-    m.m8 = back.x;    m.m9 = back.y;    m.m10 = back.z;
+    m.m0 = faceRight.x; m.m1 = faceRight.y; m.m2 = faceRight.z;
+    m.m4 = faceUp.x;    m.m5 = faceUp.y;    m.m6 = faceUp.z;
+    m.m8 = back.x;      m.m9 = back.y;      m.m10 = back.z;
     m.m12 = pos.x;    m.m13 = pos.y;    m.m14 = pos.z;
     m.m15 = 1.0f;
 

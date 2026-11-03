@@ -520,8 +520,8 @@ void Scene_Update(Scene* s, const HandInput hands[2], float dt, int keyBurner, i
     int delta = 0;
     if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_V)) delta = 1;
     else if (IsKeyPressed(KEY_LEFT)) delta = -1;
-    int click = hands[0].stickClick || IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE);
-    Watch_UpdatePage(&s->watch, hands[0].stickX, click, delta, force);
+    int confirm = hands[0].trigger || IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE);
+    Watch_UpdatePage(&s->watch, hands[0].stickX, confirm, delta, force);
     if (Watch_TakeReset(&s->watch)) s->resetView = 1;
     Watch_Render(&s->watch, &s->balloon, s->groundY);
 }
@@ -544,11 +544,6 @@ static void UpdateClip(Scene* s)
     float x = s->balloon.x;
     float z = s->balloon.z;
     int rings = Terrain_RingCount();
-    int anyReady = 0;
-    for (int level = 0; level < CLIP_LEVELS; level++) {
-        if (s->clip[level].ready) anyReady = 1;
-    }
-    int built = 0;
     for (int level = 0; level < CLIP_LEVELS; level++) {
         ClipSlot* slot = &s->clip[level];
         if (level >= rings) {
@@ -561,9 +556,6 @@ static void UpdateClip(Scene* s)
         ClipJob job;
         Clip_Describe(level, x, z, &job);
         if (slot->ready && SameJob(&slot->job, &job)) continue;
-        /* The first frame fills every ring. Afterwards only one ring is
-         * rebuilt per frame, so crossing several grid lines does not stall. */
-        if (anyReady && built >= 1) continue;
         if (slot->ready) {
             UnloadMesh(slot->mesh);
             slot->ready = 0;
@@ -571,7 +563,6 @@ static void UpdateClip(Scene* s)
         if (Clip_Build(&job, &slot->mesh)) {
             slot->ready = 1;
             slot->job = job;
-            built++;
         }
     }
     float snap = 32.0f;

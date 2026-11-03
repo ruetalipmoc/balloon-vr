@@ -26,6 +26,7 @@ typedef struct ClipJob {
     int hasHole;
     float boundL, boundR, boundB, boundT;
     int morph;
+    float viewX, viewZ;
 } ClipJob;
 
 void Clip_Describe(int level, float viewX, float viewZ, ClipJob* job);

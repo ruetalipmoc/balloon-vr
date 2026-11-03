@@ -65,6 +65,22 @@ void Handles_Update(Handles* hs, const HandInput hands[2], float dt)
     if (dt < 0.0f) dt = 0.0f;
     if (dt > 0.05f) dt = 0.05f;
 
+    /* A grip that is already down on the first tracked pose does not count.
+     * After it has been released once, holding it and moving onto a cable
+     * grabs as before. */
+    static int seen[2] = { 0, 0 };
+    static int needRelease[2] = { 0, 0 };
+
+    for (int handIndex = 0; handIndex < 2; handIndex++) {
+        if (!hands[handIndex].active) continue;
+        if (!seen[handIndex]) {
+            seen[handIndex] = 1;
+            needRelease[handIndex] = hands[handIndex].grip ? 1 : 0;
+        } else if (!hands[handIndex].grip) {
+            needRelease[handIndex] = 0;
+        }
+    }
+
     for (int i = 0; i < HANDLE_COUNT; i++) {
         HandleState* h = &hs->h[i];
 
@@ -87,7 +103,7 @@ void Handles_Update(Handles* hs, const HandInput hands[2], float dt)
         if (h->heldBy < 0) {
             for (int handIndex = 0; handIndex < 2; handIndex++) {
                 const HandInput* hand = &hands[handIndex];
-                if (!hand->active || !hand->grip) continue;
+                if (!hand->active || !hand->grip || needRelease[handIndex]) continue;
                 /* Already holding the other handle. */
                 int busy = 0;
                 for (int k = 0; k < HANDLE_COUNT; k++) {

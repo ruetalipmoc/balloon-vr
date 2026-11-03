@@ -8,6 +8,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 static int g_fails = 0;
 
@@ -142,13 +143,8 @@ static void TestHandles(void)
     Handles handles;
     Handles_Init(&handles);
     HandInput hands[2];
-    for (int i = 0; i < 2; i++) {
-        hands[i].active = 0;
-        hands[i].grip = 0;
-        hands[i].x = hands[i].y = hands[i].z = 0;
-        hands[i].qx = hands[i].qy = hands[i].qz = 0;
-        hands[i].qw = 1;
-    }
+    memset(hands, 0, sizeof(hands));
+    for (int i = 0; i < 2; i++) hands[i].qw = 1.0f;
     Handles_Update(&handles, hands, 0.016f);
     CHECK(!handles.h[HANDLE_BURNER].active);
 
@@ -157,6 +153,12 @@ static void TestHandles(void)
     hands[1].x = HANDLE_RED_X;
     hands[1].y = HANDLE_REST_Y - 0.30f;
     hands[1].z = HANDLE_Z;
+    Handles_Update(&handles, hands, 0.016f);
+    CHECK(handles.h[HANDLE_BURNER].heldBy == -1);
+
+    hands[1].grip = 0;
+    Handles_Update(&handles, hands, 0.016f);
+    hands[1].grip = 1;
     Handles_Update(&handles, hands, 0.016f);
     CHECK(handles.h[HANDLE_BURNER].heldBy == 1);
     CHECK(handles.h[HANDLE_BURNER].active);

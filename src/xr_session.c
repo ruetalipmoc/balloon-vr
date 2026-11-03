@@ -81,6 +81,10 @@ static XrAction g_pose = 0;
 static XrAction g_haptic = 0;
 static XrAction g_stick = 0;
 static XrAction g_stickClick = 0;
+static XrAction g_triggerValue = 0;
+static XrAction g_triggerClick = 0;
+static XrAction g_burnButton = 0;
+static XrAction g_ventButton = 0;
 static XrSpace g_handSpace[2] = { 0, 0 };
 static XrPath g_handPath[2] = { 0, 0 };
 static int g_gripWas[2] = { 0, 0 };
@@ -94,7 +98,6 @@ static float g_originX = 0.0f;
 static float g_originZ = 0.0f;
 static float g_floorLift = 0.0f;
 static int g_needRecenter = 1;
-static int g_floorChosen = 0;
 
 static XrCompositionLayerProjectionView g_projViews[MAX_VIEWS];
 static XrCompositionLayerProjection g_layer;
@@ -116,12 +119,13 @@ static int XrOk(const char* what, XrResult result)
 }
 
 static void SuggestProfile(const char* profile, const char* gripSuffix, int gripIsClick,
-                           const char* stickSuffix, const char* stickClickSuffix)
+                           const char* stickSuffix, const char* stickClickSuffix,
+                           int triggerClick, int faceAB)
 {
     XrPath profilePath = 0;
     if (!XrOk(profile, xrStringToPath(g_instance, profile, &profilePath))) return;
 
-    XrActionSuggestedBinding binds[16];
+    XrActionSuggestedBinding binds[24];
     int count = 0;
     const char* sides[2] = { "/user/hand/left", "/user/hand/right" };
     for (int i = 0; i < 2; i++) {
@@ -160,6 +164,38 @@ static void SuggestProfile(const char* profile, const char* gripSuffix, int grip
                 binds[count].binding = bound;
                 count++;
             }
+        }
+        if (triggerClick == 0 && g_triggerValue) {
+            snprintf(path, sizeof(path), "%s/input/trigger/value", sides[i]);
+            if (XR_SUCCEEDED(xrStringToPath(g_instance, path, &bound))) {
+                binds[count].action = g_triggerValue;
+                binds[count].binding = bound;
+                count++;
+            }
+        } else if (triggerClick == 1 && g_triggerClick) {
+            snprintf(path, sizeof(path), "%s/input/trigger/click", sides[i]);
+            if (XR_SUCCEEDED(xrStringToPath(g_instance, path, &bound))) {
+                binds[count].action = g_triggerClick;
+                binds[count].binding = bound;
+                count++;
+            }
+        }
+    }
+    /* Right controller. On Touch the upper button is B and the lower is A,
+     * which is the Y / X pair of that hand. */
+    if (faceAB && g_burnButton && g_ventButton) {
+        const char* extra[] = {
+            "/user/hand/right/input/b/click",
+            "/user/hand/right/input/a/click"
+        };
+        XrAction extraAction[] = { g_burnButton, g_ventButton };
+        for (int n = 0; n < 2; n++) {
+            XrPath bound = 0;
+            if (XR_FAILED(xrStringToPath(g_instance, extra[n], &bound))) continue;
+            if (count >= (int)(sizeof(binds) / sizeof(binds[0]))) break;
+            binds[count].action = extraAction[n];
+            binds[count].binding = bound;
+            count++;
         }
     }
 
@@ -217,19 +253,38 @@ static int CreateActions(void)
     strncpy(action.localizedActionName, "Thumbstick Click", sizeof(action.localizedActionName) - 1);
     if (!XrOk("thumbstick click", xrCreateAction(g_actions, &action, &g_stickClick))) return 0;
 
+    action.actionType = XR_ACTION_TYPE_FLOAT_INPUT;
+    strncpy(action.actionName, "trigger_value", sizeof(action.actionName) - 1);
+    strncpy(action.localizedActionName, "Trigger", sizeof(action.localizedActionName) - 1);
+    if (!XrOk("trigger value", xrCreateAction(g_actions, &action, &g_triggerValue))) return 0;
+
+    action.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+    strncpy(action.actionName, "trigger_click", sizeof(action.actionName) - 1);
+    strncpy(action.localizedActionName, "Trigger Click", sizeof(action.localizedActionName) - 1);
+    if (!XrOk("trigger click", xrCreateAction(g_actions, &action, &g_triggerClick))) return 0;
+
+    strncpy(action.actionName, "burn_button", sizeof(action.actionName) - 1);
+    strncpy(action.localizedActionName, "Burner", sizeof(action.localizedActionName) - 1);
+    if (!XrOk("burn button", xrCreateAction(g_actions, &action, &g_burnButton))) return 0;
+
+    strncpy(action.actionName, "vent_button", sizeof(action.actionName) - 1);
+    strncpy(action.localizedActionName, "Vent", sizeof(action.localizedActionName) - 1);
+    if (!XrOk("vent button", xrCreateAction(g_actions, &action, &g_ventButton))) return 0;
+
+    /* triggerClick: 0 analog, 1 click, -1 none. faceAB: right B burns, right A vents. */
     SuggestProfile("/interaction_profiles/oculus/touch_controller", "input/squeeze/value", 0,
-                   "input/thumbstick", "input/thumbstick/click");
+                   "input/thumbstick", "input/thumbstick/click", 0, 1);
     SuggestProfile("/interaction_profiles/meta/touch_plus_controller", "input/squeeze/value", 0,
-                   "input/thumbstick", "input/thumbstick/click");
+                   "input/thumbstick", "input/thumbstick/click", 0, 1);
     SuggestProfile("/interaction_profiles/meta/touch_pro_controller", "input/squeeze/value", 0,
-                   "input/thumbstick", "input/thumbstick/click");
+                   "input/thumbstick", "input/thumbstick/click", 0, 1);
     SuggestProfile("/interaction_profiles/valve/index_controller", "input/squeeze/value", 0,
-                   "input/thumbstick", "input/thumbstick/click");
+                   "input/thumbstick", "input/thumbstick/click", 0, 1);
     SuggestProfile("/interaction_profiles/htc/vive_controller", "input/squeeze/click", 1,
-                   "input/trackpad", "input/trackpad/click");
+                   "input/trackpad", "input/trackpad/click", 1, 0);
     SuggestProfile("/interaction_profiles/microsoft/motion_controller", "input/squeeze/click", 1,
-                   "input/thumbstick", "input/thumbstick/click");
-    SuggestProfile("/interaction_profiles/khr/simple_controller", "input/select/click", 1, NULL, NULL);
+                   "input/thumbstick", "input/thumbstick/click", 0, 0);
+    SuggestProfile("/interaction_profiles/khr/simple_controller", "input/select/click", 1, NULL, NULL, -1, 0);
     return 1;
 }
 
@@ -420,6 +475,45 @@ static void ReadHands(HandInput hands[2])
             hand->stickClick = pressed.isActive && pressed.currentState;
         }
 
+        int trigger = 0;
+        if (g_triggerValue) {
+            get.action = g_triggerValue;
+            XrActionStateFloat pull = { XR_TYPE_ACTION_STATE_FLOAT };
+            xrGetActionStateFloat(g_session, &get, &pull);
+            if (pull.isActive && pull.currentState > 0.65f) trigger = 1;
+        }
+        if (g_triggerClick) {
+            get.action = g_triggerClick;
+            XrActionStateBoolean pressed = { XR_TYPE_ACTION_STATE_BOOLEAN };
+            xrGetActionStateBoolean(g_session, &get, &pressed);
+            if (pressed.isActive && pressed.currentState) trigger = 1;
+        }
+        hand->trigger = trigger;
+
+        if (i == 1) {
+            int burn = 0;
+            int vent = 0;
+            if (g_burnButton) {
+                get.action = g_burnButton;
+                XrActionStateBoolean pressed = { XR_TYPE_ACTION_STATE_BOOLEAN };
+                xrGetActionStateBoolean(g_session, &get, &pressed);
+                burn = pressed.isActive && pressed.currentState;
+            }
+            if (g_ventButton) {
+                get.action = g_ventButton;
+                XrActionStateBoolean pressed = { XR_TYPE_ACTION_STATE_BOOLEAN };
+                xrGetActionStateBoolean(g_session, &get, &pressed);
+                vent = pressed.isActive && pressed.currentState;
+            }
+            /* A button already down when the session opens is not a command. */
+            static int burnArmed = 0;
+            static int ventArmed = 0;
+            if (!burn) burnArmed = 1;
+            if (!vent) ventArmed = 1;
+            hand->burnButton = burnArmed && burn;
+            hand->ventButton = ventArmed && vent;
+        }
+
         XrSpaceLocation location = { XR_TYPE_SPACE_LOCATION };
         if (XR_SUCCEEDED(xrLocateSpace(g_handSpace[i], g_space, g_frameState.predictedDisplayTime, &location))) {
             int posOk = (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
@@ -445,16 +539,10 @@ static void ApplyRecenter(Vector3 rawHead)
     if (!g_needRecenter) return;
     g_originX = rawHead.x;
     g_originZ = rawHead.z;
-    if (!g_floorChosen) {
-        /* STAGE puts the floor at y = 0. A head near y = 0 means the runtime
-         * actually gave us a head-origin LOCAL space. */
-        if (!g_stage || fabsf(rawHead.y) < 0.40f) g_floorLift = 1.62f;
-        else g_floorLift = 0.0f;
-        g_floorChosen = 1;
-        fprintf(stderr, "[xr] floor lift %.2f m (%s)\n", g_floorLift, g_stage ? "stage" : "local");
-    }
+    /* Standing eyes, whatever the runtime floor and however low the head is. */
+    g_floorLift = 1.62f - rawHead.y;
     g_needRecenter = 0;
-    fprintf(stderr, "[xr] recentered on head (%.2f, %.2f)\n", g_originX, g_originZ);
+    fprintf(stderr, "[xr] standing pose, floor lift %.2f m\n", g_floorLift);
 }
 
 int XR_Init(void)
