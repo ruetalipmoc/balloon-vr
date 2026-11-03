@@ -61,16 +61,51 @@ static Quaternion WristFacing(Vector3 wrist, Vector3 eye)
     Vector3 normal = Vector3Subtract(eye, wrist);
     if (Vector3Length(normal) < 1.0e-4f) return (Quaternion){ 0, 0, 0, 1 };
     normal = Vector3Normalize(normal);
-    Vector3 right = Vector3CrossProduct((Vector3){ 0, 1, 0 }, normal);
-    if (Vector3Length(right) < 1.0e-4f) right = (Vector3){ 1, 0, 0 };
-    right = Vector3Normalize(right);
-    Vector3 up = Vector3Normalize(Vector3CrossProduct(normal, right));
+    Vector3 side = Vector3CrossProduct((Vector3){ 0, 1, 0 }, normal);
+    if (Vector3Length(side) < 1.0e-4f) side = (Vector3){ 1, 0, 0 };
+    side = Vector3Normalize(side);
+    Vector3 up = Vector3Normalize(Vector3CrossProduct(normal, side));
 
-    /* Matches Watch_Draw: +Y is the screen normal, -Z is screen-up. */
     Matrix m = { 0 };
-    m.m0 = right.x;  m.m1 = right.y;  m.m2 = right.z;
+    m.m0 = side.x;   m.m1 = side.y;   m.m2 = side.z;
     m.m4 = normal.x; m.m5 = normal.y; m.m6 = normal.z;
     m.m8 = -up.x;    m.m9 = -up.y;    m.m10 = -up.z;
+    m.m15 = 1.0f;
+    return QuaternionFromMatrix(m);
+}
+
+static Quaternion ReadingPose(Vector3 hand, Vector3 eye, Vector3 elbowDir)
+{
+    Vector3 yAxis = Vector3Subtract(eye, hand);
+    if (Vector3Length(yAxis) < 1.0e-4f) return (Quaternion){ 0, 0, 0, 1 };
+    yAxis = Vector3Normalize(yAxis);
+    elbowDir.y = 0.0f;
+    if (Vector3Length(elbowDir) < 1.0e-4f) elbowDir = (Vector3){ -1, 0, 0 };
+    Vector3 zAxis = Vector3Normalize(elbowDir);
+    zAxis = Vector3Subtract(zAxis, Vector3Scale(yAxis, Vector3DotProduct(zAxis, yAxis)));
+    if (Vector3Length(zAxis) < 1.0e-4f) zAxis = (Vector3){ 0, 0, 1 };
+    zAxis = Vector3Normalize(zAxis);
+    Vector3 xAxis = Vector3Normalize(Vector3CrossProduct(yAxis, zAxis));
+
+    Matrix m = { 0 };
+    m.m0 = xAxis.x; m.m1 = xAxis.y; m.m2 = xAxis.z;
+    m.m4 = yAxis.x; m.m5 = yAxis.y; m.m6 = yAxis.z;
+    m.m8 = zAxis.x; m.m9 = zAxis.y; m.m10 = zAxis.z;
+    m.m15 = 1.0f;
+    return QuaternionFromMatrix(m);
+}
+
+static Quaternion HangingPose(Vector3 outDir)
+{
+    Vector3 zAxis = { 0.0f, 1.0f, 0.0f };
+    outDir.y = 0.0f;
+    if (Vector3Length(outDir) < 1.0e-4f) outDir = (Vector3){ 1.0f, 0.0f, 0.0f };
+    Vector3 yAxis = Vector3Normalize(outDir);
+    Vector3 xAxis = Vector3Normalize(Vector3CrossProduct(yAxis, zAxis));
+    Matrix m = { 0 };
+    m.m0 = xAxis.x; m.m1 = xAxis.y; m.m2 = xAxis.z;
+    m.m4 = yAxis.x; m.m5 = yAxis.y; m.m6 = yAxis.z;
+    m.m8 = zAxis.x; m.m9 = zAxis.y; m.m10 = zAxis.z;
     m.m15 = 1.0f;
     return QuaternionFromMatrix(m);
 }
@@ -97,23 +132,23 @@ static void DesktopHands(HandInput hands[2], Vector3 eye, int burn, int vent)
     Vector3 leftPos;
     Vector3 rightPos;
     Quaternion leftQ;
-    /* The watch only shows when the back of the left hand faces the eyes.
-     * Look down, or hold C, to raise the wrist into that pose. V rolls it
-     * over to the wind page. Grabbing the vent still takes the left hand. */
+    /* The watch shows only with the forearm horizontal and the back of the
+     * hand toward the face. Look down, or hold C, to take that pose. */
     int reading = g_pitch < -0.40f || IsKeyDown(KEY_C);
     if (getenv("BALLOON_WATCH")) reading = 1;
     if (vent) {
         leftPos = (Vector3){ HANDLE_GREEN_X, HANDLE_REST_Y - HANDLE_MAX_PULL * 0.85f, HANDLE_Z };
         leftQ = WristFacing(leftPos, eye);
     } else if (reading) {
-        leftPos = Vector3Add(eye, Vector3Add(Vector3Scale(right, -0.14f),
-                              Vector3Add((Vector3){ 0, -0.04f, 0 }, Vector3Scale(forward, 0.40f))));
-        leftQ = WristFacing(leftPos, eye);
+        leftPos = Vector3Add(eye, Vector3Add(Vector3Scale(right, -0.18f),
+                              Vector3Add((Vector3){ 0, -0.08f, 0 }, Vector3Scale(forward, 0.42f))));
+        Vector3 elbow = Vector3Add(Vector3Scale(forward, -0.85f), Vector3Scale(right, -0.45f));
+        leftQ = ReadingPose(leftPos, eye, elbow);
     } else {
         leftPos = Vector3Add(eye, Vector3Add(Vector3Scale(right, -0.28f),
-                              Vector3Add((Vector3){ 0, -0.48f, 0 }, Vector3Scale(forward, 0.16f))));
-        /* Palm inward, watch toward the floor, so a casual glance misses it. */
-        leftQ = QuaternionFromAxisAngle((Vector3){ 0, 0, 1 }, -1.15f);
+                              Vector3Add((Vector3){ 0, -0.55f, 0 }, Vector3Scale(forward, 0.10f))));
+        /* Elbow above the wrist, so a lowered arm does not count as reading. */
+        leftQ = HangingPose(right);
     }
     if (burn) {
         rightPos = (Vector3){ HANDLE_RED_X, HANDLE_REST_Y - HANDLE_MAX_PULL * 0.85f, HANDLE_Z };
@@ -129,11 +164,11 @@ static void DrawHint(int vr)
 {
 #ifdef __EMSCRIPTEN__
     (void)vr;
-    const char* line = "Glisser pour regarder    F bruleur    G soupape    regarder en bas : montre";
+    const char* line = "Glisser pour regarder    F bruleur    G soupape    regarder en bas : montre    fleches : pages";
 #else
     const char* line = vr
-        ? "Pull a ceiling handle. Look at the left wrist to read it.  F burner  G vent  V wind  R recenter"
-        : "Click to look.  F burner (red)  G vent (green)  Look down or C: watch  V: winds";
+        ? "Red burns, green vents.  Left stick turns the watch pages.  Stick click resets the view."
+        : "Click to look.  F burner  G vent  Look down or C: watch  Arrows: pages  Enter: reset view";
 #endif
     DrawRectangle(0, GetScreenHeight() - 36, GetScreenWidth(), 36, (Color){ 8, 16, 24, 180 });
     DrawText(line, 16, GetScreenHeight() - 26, 18, (Color){ 232, 244, 240, 255 });
@@ -222,7 +257,9 @@ static void PrintUsage(void)
     printf("  Desktop: mouse look, F/left mouse burns, G/right mouse vents.\n");
     printf("  --view   Ground draw distance in metres (default %.0f, max %.0f).\n",
            TERRAIN_VIEW_DEFAULT, TERRAIN_VIEW_MAX);
-    printf("           Haze fades to the sky across that distance.\n");
+    printf("           Past that, a coarse copy of the real ground continues\n");
+    printf("           to the horizon, so raising it shows detail further out.\n");
+    printf("           The detailed mesh itself stops at %.0f m.\n", TERRAIN_VIEW_MAX);
     printf("  --lod    Four ascending distances, in metres, where detail drops\n");
     printf("           (default 100,200,340,520). Past the last, one quad per chunk.\n");
     printf("           A step narrower than a chunk (64 m) changes more abruptly.\n");
@@ -278,7 +315,7 @@ int main(int argc, char** argv)
     InitWindow(1440, 900, "Balloon VR");
     SetTargetFPS(72);
 #endif
-    rlSetClipPlanes(0.05, 4000.0);
+    rlSetClipPlanes(0.05, 18000.0);
     srand(0xB411u);
 
     Scene* scene = Scene_Create();
@@ -310,7 +347,11 @@ int main(int argc, char** argv)
 #endif
         if (getenv("BALLOON_BURN")) burn = 1;
         if (getenv("BALLOON_VENT")) vent = 1;
-        if (IsKeyPressed(KEY_R)) XR_Recenter();
+        if (IsKeyPressed(KEY_R) || Scene_TakeViewReset(scene)) {
+            XR_Recenter();
+            g_yaw = 0.0f;
+            g_pitch = 0.22f;
+        }
 
         if (xr) {
             XrFrame frame;
@@ -332,7 +373,7 @@ int main(int argc, char** argv)
                 mirror.fovy = frame.mirrorFovy > 1.0f ? frame.mirrorFovy : 70.0f;
                 mirror.projection = CAMERA_PERSPECTIVE;
                 BeginDrawing();
-                ClearBackground((Color){ 120, 176, 210, 255 });
+                ClearBackground((Color){ 232, 210, 180, 255 });
                 BeginMode3D(mirror);
                 Scene_Draw(scene, mirror.position);
                 EndMode3D();
@@ -358,7 +399,7 @@ int main(int argc, char** argv)
         camera.projection = CAMERA_PERSPECTIVE;
 
         BeginDrawing();
-        ClearBackground((Color){ 120, 176, 210, 255 });
+        ClearBackground((Color){ 232, 210, 180, 255 });
         BeginMode3D(camera);
         Scene_Draw(scene, eye);
         EndMode3D();

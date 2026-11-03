@@ -12,6 +12,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef GL_POLYGON_OFFSET_FILL
+#define GL_POLYGON_OFFSET_FILL 0x8037
+#endif
+extern void glEnable(unsigned int cap);
+extern void glDisable(unsigned int cap);
+extern void glPolygonOffset(float factor, float units);
+
 /* 24 chunks * 64 m = TERRAIN_VIEW_MAX. Kept an integer so the slot array
  * is a real compile-time size, not a variable-length array. */
 #define CHUNK_RADIUS_MAX 24
@@ -43,6 +50,11 @@ struct Scene {
     Mesh envelope;
     Mesh crown;
     Mesh sky;
+    Mesh farField;
+    int farReady;
+    int farCx, farCz, farRadius;
+    float farOuter;
+    int resetView;
     Material material;
     int meshesReady;
 
@@ -257,7 +269,7 @@ static Mesh MakeSky(void)
 {
     const int stacks = 7;
     const int slices = 14;
-    float radius = 1400.0f;
+    float radius = 8000.0f;
     int verts = stacks * slices * 6;
     float* v = (float*)MemAlloc((unsigned int)verts * 3 * sizeof(float));
     float* n = (float*)MemAlloc((unsigned int)verts * 3 * sizeof(float));
@@ -270,9 +282,10 @@ static Mesh MakeSky(void)
     for (int s = 0; s < stacks; s++) {
         float t0 = (float)s / (float)stacks;
         float t1 = (float)(s + 1) / (float)stacks;
-        /* 0 at the zenith, 1 a little below the horizon. */
-        float p0 = t0 * 1.08f;
-        float p1 = t1 * 1.08f;
+        /* 0 at the zenith, past 1 is below the horizon so a gap reads as haze
+         * rather than the blue clear colour. */
+        float p0 = t0 * 1.28f;
+        float p1 = t1 * 1.28f;
         float y0 = cosf(p0 * (float)M_PI * 0.5f) * radius;
         float y1 = cosf(p1 * (float)M_PI * 0.5f) * radius;
         float r0 = sinf(p0 * (float)M_PI * 0.5f) * radius;
@@ -347,7 +360,11 @@ Scene* Scene_Create(void)
     if (sx) x = strtof(sx, NULL);
     if (sz) z = strtof(sz, NULL);
     float ground = Terrain_GroundAt(x, z);
-    Balloon_Reset(&s->balloon, x, z, ground + 90.0f);
+    float agl = 90.0f;
+    const char* sagl = getenv("BALLOON_AGL");
+    if (sagl) agl = strtof(sagl, NULL);
+    if (agl < 2.0f) agl = 2.0f;
+    Balloon_Reset(&s->balloon, x, z, ground + agl);
     s->groundY = ground;
     Handles_Init(&s->handles);
 
@@ -374,6 +391,7 @@ void Scene_Destroy(Scene* s)
         UnloadMesh(s->envelope);
         UnloadMesh(s->crown);
         UnloadMesh(s->sky);
+        if (s->farReady) UnloadMesh(s->farField);
         UnloadMaterial(s->material);
     }
     Watch_Shutdown(&s->watch);
@@ -384,6 +402,13 @@ void Scene_Destroy(Scene* s)
 
 const Balloon* Scene_Balloon(const Scene* s) { return &s->balloon; }
 float Scene_Ground(const Scene* s) { return s->groundY; }
+
+int Scene_TakeViewReset(Scene* s)
+{
+    int v = s->resetView;
+    s->resetView = 0;
+    return v;
+}
 
 static void SpawnParticle(Scene* s, int kind, Vector3 p, Vector3 v, float life)
 {
@@ -473,15 +498,15 @@ void Scene_Update(Scene* s, const HandInput hands[2], float dt, int keyBurner, i
         }
     }
 
-    if (hands[0].active) {
-        Quaternion q = { hands[0].qx, hands[0].qy, hands[0].qz, hands[0].qw };
-        int force = -1;
-        const char* page = getenv("BALLOON_WATCH_PAGE");
-        if (page && page[0] == '1') force = 1;
-        else if (page && page[0] == '0') force = 0;
-        else if (IsKeyDown(KEY_V) || IsKeyDown(KEY_TAB)) force = 1;
-        Watch_UpdatePage(&s->watch, q, force);
-    }
+    int force = -1;
+    const char* page = getenv("BALLOON_WATCH_PAGE");
+    if (page && page[0] >= '0' && page[0] <= '2' && page[1] == '\0') force = page[0] - '0';
+    int delta = 0;
+    if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_V)) delta = 1;
+    else if (IsKeyPressed(KEY_LEFT)) delta = -1;
+    int click = hands[0].stickClick || IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE);
+    Watch_UpdatePage(&s->watch, hands[0].stickX, click, delta, force);
+    if (Watch_TakeReset(&s->watch)) s->resetView = 1;
     Watch_Render(&s->watch, &s->balloon, s->groundY);
 }
 
@@ -549,6 +574,52 @@ static void UpdateChunks(Scene* s)
             slot->cz = cz;
             slot->lod = lod;
         }
+    }
+}
+
+static float FarExtent(float agl)
+{
+    if (agl < 0.0f) agl = 0.0f;
+    /* From height H the ground has to reach about H / tan(2 deg) before it
+     * sits in the haze at the horizon. Capped so the mesh stays cheap. */
+    float need = 5000.0f + agl * 28.0f;
+    float view = Terrain_ViewDistance() * 4.0f;
+    if (need < view) need = view;
+    if (need < 6000.0f) need = 6000.0f;
+    if (need > 12000.0f) need = 12000.0f;
+    return need;
+}
+
+static void UpdateFar(Scene* s)
+{
+    int ccx = (int)floorf(s->balloon.x / TERRAIN_CHUNK_SIZE);
+    int ccz = (int)floorf(s->balloon.z / TERRAIN_CHUNK_SIZE);
+    int radius = ChunkRadius();
+    float agl = s->balloon.altitude - s->groundY;
+    float outer = ceilf(FarExtent(agl) / 256.0f) * 256.0f;
+    if (s->farReady && s->farCx == ccx && s->farCz == ccz && s->farRadius == radius &&
+        fabsf(s->farOuter - outer) < 1.0f) return;
+
+    if (s->farReady) {
+        UnloadMesh(s->farField);
+        s->farReady = 0;
+    }
+    float hx0 = (float)(ccx - radius) * TERRAIN_CHUNK_SIZE;
+    float hx1 = (float)(ccx + radius + 1) * TERRAIN_CHUNK_SIZE;
+    float hz0 = (float)(ccz - radius) * TERRAIN_CHUNK_SIZE;
+    float hz1 = (float)(ccz + radius + 1) * TERRAIN_CHUNK_SIZE;
+    float edgeDist = ((float)radius - 0.5f) * TERRAIN_CHUNK_SIZE;
+    if (edgeDist < 1.0f) edgeDist = 1.0f;
+    int own = Terrain_GridForLod(Terrain_LodForDistance(edgeDist));
+    int neighbor = Terrain_GridForLod(Terrain_LodForDistance(edgeDist + TERRAIN_CHUNK_SIZE));
+    int edgeGrid = own < neighbor ? own : neighbor;
+    float seam = TERRAIN_CHUNK_SIZE / (float)edgeGrid;
+    if (FarField_Build(s->balloon.x, s->balloon.z, hx0, hx1, hz0, hz1, outer, seam, &s->farField)) {
+        s->farReady = 1;
+        s->farCx = ccx;
+        s->farCz = ccz;
+        s->farRadius = radius;
+        s->farOuter = outer;
     }
 }
 
@@ -1142,6 +1213,7 @@ static void DrawParticles(const Scene* s)
 void Scene_Draw(Scene* s, Vector3 eye)
 {
     UpdateChunks(s);
+    UpdateFar(s);
 
     rlDisableDepthMask();
     rlDisableBackfaceCulling();
@@ -1156,15 +1228,21 @@ void Scene_Draw(Scene* s, Vector3 eye)
     /* World scrolls under a stationary basket. */
     rlPushMatrix();
     rlTranslatef(-s->balloon.x, -s->balloon.altitude, -s->balloon.z);
+    if (s->farReady) DrawMesh(s->farField, s->material, MatrixIdentity());
     for (int i = 0; i < MAX_CHUNKS; i++) {
         if (!s->slots[i].occupied || !s->slots[i].mesh.ready) continue;
         DrawMesh(s->slots[i].mesh.ground, s->material, MatrixIdentity());
     }
     BeginBlendMode(BLEND_ALPHA);
+    rlDrawRenderBatchActive();
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.5f, -2.0f);
     for (int i = 0; i < MAX_CHUNKS; i++) {
         if (!s->slots[i].occupied || !s->slots[i].mesh.hasWater) continue;
         DrawMesh(s->slots[i].mesh.water, s->material, MatrixIdentity());
     }
+    rlDrawRenderBatchActive();
+    glDisable(GL_POLYGON_OFFSET_FILL);
     EndBlendMode();
     for (int i = 0; i < MAX_CHUNKS; i++) {
         if (!s->slots[i].occupied) continue;

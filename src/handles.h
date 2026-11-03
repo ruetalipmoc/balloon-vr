@@ -11,6 +11,9 @@
 typedef struct HandInput {
     int active;          /* pose is valid this frame */
     int grip;            /* squeeze is held */
+    float stickX;        /* -1..1, thumbstick or trackpad */
+    float stickY;
+    int stickClick;      /* thumbstick / trackpad press */
     float x, y, z;       /* metres, basket space */
     float qx, qy, qz, qw; /* orientation, identity if unused */
 } HandInput;

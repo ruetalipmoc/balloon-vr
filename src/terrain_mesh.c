@@ -121,17 +121,26 @@ static Color ApplyHaze(Color c, float fog)
 
 static float FogAmount(float dist)
 {
-    /* Same shape as the default 704 m view: colour holds, then drains to
-     * blue, and is gone a little past the loaded edge. */
+    /* `--view` is where the colour has mostly washed out. The coarse ground
+     * beyond it keeps a little shading, then meets the sky so the disc has
+     * no rim. The last LOD step (default 520 m) is not this distance. */
     float view = Terrain_ViewDistance();
-    float start = view * (220.0f / TERRAIN_VIEW_DEFAULT);
-    float end = view * (840.0f / TERRAIN_VIEW_DEFAULT);
-    float span = end - start;
+    if (view < TERRAIN_CHUNK_SIZE) view = TERRAIN_CHUNK_SIZE;
+    float start = view * 0.22f;
+    float span = view - start;
     if (span < 1.0f) span = 1.0f;
-    float t = (dist - start) / span;
-    if (t <= 0.0f) return 0.0f;
-    if (t >= 1.0f) return 1.0f;
-    return t * t * (3.0f - 2.0f * t);
+    const float farEnd = 11000.0f;
+    if (dist <= view) {
+        float u = (dist - start) / span;
+        if (u <= 0.0f) return 0.0f;
+        if (u >= 1.0f) u = 1.0f;
+        float s = u * u * (3.0f - 2.0f * u);
+        return s * 0.72f;
+    }
+    float u = (dist - view) / (farEnd - view);
+    if (u >= 1.0f) return 1.0f;
+    float s = u * u * (3.0f - 2.0f * u);
+    return 0.72f + 0.28f * s;
 }
 
 static void VertexShade(float x, float y, float z, float viewX, float viewZ,
@@ -340,6 +349,39 @@ static void AddSkirt(float* v, float* n, unsigned char* col, float* uv, int* i,
     }
 }
 
+typedef struct WetPt {
+    float x, y, z;
+} WetPt;
+
+/* Keep the part of the polygon that is at or under the waterline. */
+static int ClipWet(const WetPt* in, int n, WetPt* out)
+{
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        WetPt a = in[i];
+        WetPt b = in[(i + 1) % n];
+        int aIn = a.y <= TERRAIN_WATER;
+        int bIn = b.y <= TERRAIN_WATER;
+        if (aIn != bIn) {
+            float dy = b.y - a.y;
+            float t = (fabsf(dy) < 1.0e-5f) ? 0.0f : (TERRAIN_WATER - a.y) / dy;
+            if (t < 0.0f) t = 0.0f;
+            if (t > 1.0f) t = 1.0f;
+            if (m < 8) {
+                out[m].x = a.x + (b.x - a.x) * t;
+                out[m].y = TERRAIN_WATER;
+                out[m].z = a.z + (b.z - a.z) * t;
+                m++;
+            }
+        }
+        if (bIn && m < 8) {
+            out[m] = b;
+            m++;
+        }
+    }
+    return m;
+}
+
 static void SkirtEdge(float* v, float* n, unsigned char* col, float* uv, int* i,
                       int jx0, int jz0, int jx1, int jz1, int grid,
                       float x0, float z0, float size, int cx, int cz,
@@ -416,7 +458,8 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
     UploadFlat(&out->ground, gi, gv, gn, gc, gu);
 
     if (waterQuads > 0) {
-        int wvCount = waterQuads * 6;
+        /* A clipped shore can turn one triangle into two, so allow 12 verts. */
+        int wvCount = waterQuads * 12;
         float* wv = (float*)MemAlloc((unsigned int)wvCount * 3 * sizeof(float));
         float* wn = (float*)MemAlloc((unsigned int)wvCount * 3 * sizeof(float));
         unsigned char* wc = (unsigned char*)MemAlloc((unsigned int)wvCount * 4);
@@ -435,21 +478,40 @@ int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh
                     continue;
                 int tris[2][3] = { { 0, 2, 1 }, { 0, 3, 2 } };
                 for (int t = 0; t < 2; t++) {
+                    WetPt poly[3];
                     for (int k = 0; k < 3; k++) {
                         int id = tris[t][k];
-                        float fog = FogAmount(hypotf(corner[id].x - viewX, corner[id].z - viewZ));
-                        Color water = { 64, 150, 196, 255 };
-                        water = ApplyHaze(water, fog);
-                        water.a = 170;
-                        PushVert(wv, wn, wc, wu, wi, corner[id].x, TERRAIN_WATER, corner[id].z,
-                                 0, 1, 0, water);
-                        wi++;
+                        poly[k].x = corner[id].x;
+                        poly[k].y = corner[id].y;
+                        poly[k].z = corner[id].z;
+                    }
+                    WetPt wet[8];
+                    int m = ClipWet(poly, 3, wet);
+                    if (m < 3) continue;
+                    for (int k = 1; k < m - 1; k++) {
+                        WetPt fan[3] = { wet[0], wet[k], wet[k + 1] };
+                        for (int v = 0; v < 3; v++) {
+                            float fog = FogAmount(hypotf(fan[v].x - viewX, fan[v].z - viewZ));
+                            Color water = { 64, 150, 196, 255 };
+                            water = ApplyHaze(water, fog);
+                            water.a = 210;
+                            PushVert(wv, wn, wc, wu, wi, fan[v].x, TERRAIN_WATER, fan[v].z,
+                                     0, 1, 0, water);
+                            wi++;
+                        }
                     }
                 }
             }
         }
-        UploadFlat(&out->water, wvCount, wv, wn, wc, wu);
-        out->hasWater = 1;
+        if (wi >= 3) {
+            UploadFlat(&out->water, wi, wv, wn, wc, wu);
+            out->hasWater = 1;
+        } else {
+            MemFree(wv);
+            MemFree(wn);
+            MemFree(wc);
+            MemFree(wu);
+        }
     }
 
     if (lod <= 2) AddProps(cx, cz, x0, z0, size, lod, viewX, viewZ, out);
@@ -463,4 +525,168 @@ void ChunkMesh_Free(ChunkMesh* chunk)
     UnloadMesh(chunk->ground);
     if (chunk->hasWater) UnloadMesh(chunk->water);
     memset(chunk, 0, sizeof(*chunk));
+}
+
+/* A vertex on the outer edge of a fine band is lerped onto the next coarser
+ * step, so the coarse band's straight edge occupies the same line. */
+static float BandHeight(float x, float z, float oL, float oR, float oB, float oT, float snap)
+{
+    int onL = fabsf(x - oL) <= 0.2f;
+    int onR = fabsf(x - oR) <= 0.2f;
+    int onB = fabsf(z - oB) <= 0.2f;
+    int onT = fabsf(z - oT) <= 0.2f;
+    int edgeX = (onL || onR) && !(onB || onT);
+    int edgeZ = (onB || onT) && !(onL || onR);
+    if (!edgeX && !edgeZ) return Terrain_Height(x, z);
+
+    float along = edgeX ? z : x;
+    float fixed = edgeX ? x : z;
+    float a = floorf(along / snap) * snap;
+    float b = a + snap;
+    float t = (along - a) / snap;
+    if (t < 0.001f || t > 0.999f) return Terrain_Height(x, z);
+    float h0 = edgeX ? Terrain_Height(fixed, a) : Terrain_Height(a, fixed);
+    float h1 = edgeX ? Terrain_Height(fixed, b) : Terrain_Height(b, fixed);
+    return Lerpf(h0, h1, t);
+}
+
+static float AlignDown(float v, float step)
+{
+    return floorf(v / step + 1.0e-4f) * step;
+}
+
+static float AlignUp(float v, float step)
+{
+    return ceilf(v / step - 1.0e-4f) * step;
+}
+
+typedef struct FarBuf {
+    float* v;
+    float* n;
+    unsigned char* c;
+    float* uv;
+    int count;
+    int cap;
+} FarBuf;
+
+static int FarPush(FarBuf* b, float x, float y, float z, float viewX, float viewZ)
+{
+    if (b->count >= b->cap) {
+        int cap = b->cap > 0 ? b->cap * 2 : 2048;
+        b->v = (float*)MemRealloc(b->v, (unsigned int)cap * 3 * sizeof(float));
+        b->n = (float*)MemRealloc(b->n, (unsigned int)cap * 3 * sizeof(float));
+        b->c = (unsigned char*)MemRealloc(b->c, (unsigned int)cap * 4);
+        b->uv = (float*)MemRealloc(b->uv, (unsigned int)cap * 2 * sizeof(float));
+        if (!b->v || !b->n || !b->c || !b->uv) return 0;
+        b->cap = cap;
+    }
+    float nx, ny, nz;
+    Terrain_Normal(x, z, &nx, &ny, &nz);
+    float fog = FogAmount(hypotf(x - viewX, z - viewZ));
+    Color col = GroundColor(x, z, y, ny, fog);
+    PushVert(b->v, b->n, b->c, b->uv, b->count, x, y, z, nx, ny, nz, col);
+    b->count++;
+    return 1;
+}
+
+static void FarTri(FarBuf* b, float x0, float z0, float x1, float z1, float x2, float z2,
+                   float oL, float oR, float oB, float oT, float snap,
+                   float viewX, float viewZ)
+{
+    float xs[3] = { x0, x1, x2 };
+    float zs[3] = { z0, z1, z2 };
+    for (int i = 0; i < 3; i++) {
+        float y = BandHeight(xs[i], zs[i], oL, oR, oB, oT, snap);
+        if (!FarPush(b, xs[i], y, zs[i], viewX, viewZ)) return;
+    }
+}
+
+static void FarQuad(FarBuf* b, float x0, float z0, float x1, float z1,
+                    float oL, float oR, float oB, float oT, float snap,
+                    float viewX, float viewZ)
+{
+    FarTri(b, x0, z0, x1, z1, x1, z0, oL, oR, oB, oT, snap, viewX, viewZ);
+    FarTri(b, x0, z0, x0, z1, x1, z1, oL, oR, oB, oT, snap, viewX, viewZ);
+}
+
+static int CellInside(float x0, float x1, float z0, float z1,
+                      float iL, float iR, float iB, float iT)
+{
+    return x0 >= iL - 0.2f && x1 <= iR + 0.2f && z0 >= iB - 0.2f && z1 <= iT + 0.2f;
+}
+
+/* Border between an inner rectangle and a larger one, in quads of `step`.
+ * The outer edge is snapped onto `snap` (the next band's step). */
+static void FarFrame(FarBuf* b, float iL, float iR, float iB, float iT,
+                     float oL, float oR, float oB, float oT, float step, float snap,
+                     float viewX, float viewZ)
+{
+    if (oR - oL < step || oT - oB < step) return;
+    for (float z = oB; z < oT - 0.1f; z += step) {
+        float z1 = z + step;
+        if (z1 > oT) z1 = oT;
+        for (float x = oL; x < oR - 0.1f; x += step) {
+            float x1 = x + step;
+            if (x1 > oR) x1 = oR;
+            if (CellInside(x, x1, z, z1, iL, iR, iB, iT)) continue;
+            FarQuad(b, x, z, x1, z1, oL, oR, oB, oT, snap, viewX, viewZ);
+        }
+    }
+}
+
+int FarField_Build(float viewX, float viewZ,
+                   float holeX0, float holeX1, float holeZ0, float holeZ1,
+                   float outer, float seam, Mesh* out)
+{
+    memset(out, 0, sizeof(*out));
+    if (seam < 4.0f) seam = 4.0f;
+    if (seam > 64.0f) seam = 64.0f;
+    /* First ring matches the streamed edge. Its outside is snapped onto the
+     * next band's 128 m step so the two share a line. */
+    const float reach[] = { 96.0f, 640.0f, 1664.0f, 3712.0f, 7808.0f, 12000.0f };
+    const float step[] = { seam, 128.0f, 256.0f, 512.0f, 1024.0f, 2048.0f };
+    const float snap[] = { 128.0f, 256.0f, 512.0f, 1024.0f, 2048.0f, 2048.0f };
+    const int bands = 6;
+
+    if (outer < 256.0f) outer = 256.0f;
+    if (outer > 12000.0f) outer = 12000.0f;
+
+    FarBuf buf;
+    memset(&buf, 0, sizeof(buf));
+
+    float iL = holeX0, iR = holeX1, iB = holeZ0, iT = holeZ1;
+    for (int i = 0; i < bands; i++) {
+        float oL = AlignDown(holeX0 - reach[i], snap[i]);
+        float oR = AlignUp(holeX1 + reach[i], snap[i]);
+        float oB = AlignDown(holeZ0 - reach[i], snap[i]);
+        float oT = AlignUp(holeZ1 + reach[i], snap[i]);
+        float limL = AlignDown(viewX - outer, snap[i]);
+        float limR = AlignUp(viewX + outer, snap[i]);
+        float limB = AlignDown(viewZ - outer, snap[i]);
+        float limT = AlignUp(viewZ + outer, snap[i]);
+        if (oL < limL) oL = limL;
+        if (oR > limR) oR = limR;
+        if (oB < limB) oB = limB;
+        if (oT > limT) oT = limT;
+        if (!(oL < iL && oR > iR && oB < iB && oT > iT)) {
+            if (reach[i] >= outer) break;
+            continue;
+        }
+        FarFrame(&buf, iL, iR, iB, iT, oL, oR, oB, oT, step[i], snap[i], viewX, viewZ);
+        iL = oL;
+        iR = oR;
+        iB = oB;
+        iT = oT;
+        if (reach[i] >= outer) break;
+    }
+
+    if (buf.count < 3) {
+        MemFree(buf.v);
+        MemFree(buf.n);
+        MemFree(buf.c);
+        MemFree(buf.uv);
+        return 0;
+    }
+    UploadFlat(out, buf.count, buf.v, buf.n, buf.c, buf.uv);
+    return 1;
 }

@@ -29,8 +29,11 @@ static void DrawArrow(int x, int y, float bearing, int len, float thick, Color c
 static void DrawDots(int page)
 {
     int y = 70;
-    DrawCircle(WATCH_SIZE / 2 - 14, y, page == 0 ? 7 : 4, page == 0 ? (Color){ 110, 245, 210, 255 } : (Color){ 70, 100, 110, 255 });
-    DrawCircle(WATCH_SIZE / 2 + 14, y, page == 1 ? 7 : 4, page == 1 ? (Color){ 110, 245, 210, 255 } : (Color){ 70, 100, 110, 255 });
+    for (int i = 0; i < 3; i++) {
+        int on = page == i;
+        DrawCircle(WATCH_SIZE / 2 + (i - 1) * 28, y, on ? 7 : 4,
+                   on ? (Color){ 110, 245, 210, 255 } : (Color){ 70, 100, 110, 255 });
+    }
 }
 
 void Watch_Init(Watch* w)
@@ -39,6 +42,9 @@ void Watch_Init(Watch* w)
     SetTextureFilter(w->screen.texture, TEXTURE_FILTER_BILINEAR);
     w->ready = 1;
     w->page = 0;
+    w->resetRequest = 0;
+    w->clickWas = 0;
+    w->prevStickX = 0.0f;
 }
 
 void Watch_Shutdown(Watch* w)
@@ -48,18 +54,29 @@ void Watch_Shutdown(Watch* w)
     w->ready = 0;
 }
 
-void Watch_UpdatePage(Watch* w, Quaternion q, int forcePage)
+void Watch_UpdatePage(Watch* w, float stickX, int stickClick, int keyDelta, int forcePage)
 {
     if (!w->ready) return;
-    if (forcePage == 0 || forcePage == 1) {
+    if (forcePage >= 0 && forcePage <= 2) {
         w->page = forcePage;
-        return;
+    } else {
+        int step = 0;
+        if (stickX > 0.65f && w->prevStickX <= 0.65f) step = 1;
+        else if (stickX < -0.65f && w->prevStickX >= -0.65f) step = -1;
+        if (keyDelta < 0) step = -1;
+        else if (keyDelta > 0) step = 1;
+        if (step != 0) w->page = (w->page + step + 3) % 3;
     }
-    /* 12 o'clock is -Z of the grip. Upright keeps the flight page; rolling
-     * the wrist so the face is sideways opens the wind page. */
-    Vector3 fingers = Vector3RotateByQuaternion((Vector3){ 0, 0, -1 }, q);
-    if (w->page == 0 && fingers.y < 0.20f) w->page = 1;
-    else if (w->page == 1 && fingers.y > 0.72f) w->page = 0;
+    w->prevStickX = stickX;
+    if (w->page == 2 && stickClick && !w->clickWas) w->resetRequest = 1;
+    w->clickWas = stickClick;
+}
+
+int Watch_TakeReset(Watch* w)
+{
+    int v = w->resetRequest;
+    w->resetRequest = 0;
+    return v;
 }
 
 static void DrawFlight(const Balloon* balloon, float agl, float hspd, float course)
@@ -139,6 +156,33 @@ static void DrawWind(const Balloon* balloon)
     }
 }
 
+static void DrawMenu(void)
+{
+    Color cyan = { 110, 245, 210, 255 };
+    Color dim = { 170, 198, 204, 255 };
+    Color paper = { 236, 248, 246, 255 };
+
+    DrawText("MENU", 36, 26, 36, cyan);
+
+    int bx = 48;
+    int by = 168;
+    int bw = WATCH_SIZE - 96;
+    int bh = 168;
+    DrawRectangle(bx, by, bw, bh, (Color){ 14, 58, 72, 255 });
+    DrawRectangleLines(bx, by, bw, bh, cyan);
+    DrawRectangleLines(bx + 3, by + 3, bw - 6, bh - 6, (Color){ 40, 110, 124, 255 });
+    const char* label = "RESET VIEW";
+    int lw = MeasureText(label, 42);
+    DrawText(label, (WATCH_SIZE - lw) / 2, by + 46, 42, paper);
+    const char* hint = "STICK CLICK";
+    int hw = MeasureText(hint, 22);
+    DrawText(hint, (WATCH_SIZE - hw) / 2, by + 108, 22, dim);
+
+    const char* pages = "STICK LEFT / RIGHT";
+    int pw = MeasureText(pages, 22);
+    DrawText(pages, (WATCH_SIZE - pw) / 2, 400, 22, dim);
+}
+
 void Watch_Render(Watch* w, const Balloon* balloon, float groundY)
 {
     if (!w->ready) return;
@@ -157,19 +201,32 @@ void Watch_Render(Watch* w, const Balloon* balloon, float groundY)
     DrawRectangle(16, 16, WATCH_SIZE - 32, WATCH_SIZE - 32, panel);
     DrawRectangleLines(16, 16, WATCH_SIZE - 32, WATCH_SIZE - 32, cyan);
     if (w->page == 0) DrawFlight(balloon, agl, hspd, course);
-    else DrawWind(balloon);
+    else if (w->page == 1) DrawWind(balloon);
+    else DrawMenu();
     DrawDots(w->page);
     EndTextureMode();
 }
 
+static int g_watchVisible = 0;
+
 static int FaceTowardEye(Vector3 handPos, Quaternion q, Vector3 eye)
 {
     Vector3 back = Vector3RotateByQuaternion((Vector3){ 0, 1, 0 }, q);
+    Vector3 forearm = Vector3RotateByQuaternion((Vector3){ 0, 0, 1 }, q);
     Vector3 toEye = Vector3Subtract(eye, handPos);
     float dist = Vector3Length(toEye);
-    if (dist < 0.05f || dist > 0.85f) return 0;
+    if (dist < 0.08f || dist > 0.95f) {
+        g_watchVisible = 0;
+        return 0;
+    }
     toEye = Vector3Scale(toEye, 1.0f / dist);
-    return Vector3DotProduct(back, toEye) > 0.78f;
+    float facing = Vector3DotProduct(back, toEye);
+    float tilt = fabsf(forearm.y);
+    /* Forearm near horizontal, back of the hand toward the face.
+     * A little hysteresis so it does not flicker on the threshold. */
+    if (g_watchVisible) g_watchVisible = tilt < 0.52f && facing > 0.48f;
+    else g_watchVisible = tilt < 0.36f && facing > 0.68f;
+    return g_watchVisible;
 }
 
 void Watch_Draw(const Watch* w, Vector3 handPos, Quaternion q, Vector3 eye)

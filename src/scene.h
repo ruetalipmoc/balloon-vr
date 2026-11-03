@@ -23,4 +23,7 @@ void Scene_Draw(Scene* s, Vector3 eye);
 const Balloon* Scene_Balloon(const Scene* s);
 float Scene_Ground(const Scene* s);
 
+/* 1 once after the watch menu asks to recenter. */
+int Scene_TakeViewReset(Scene* s);
+
 #endif

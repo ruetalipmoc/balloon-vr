@@ -27,4 +27,10 @@ typedef struct ChunkMesh {
 int ChunkMesh_Build(int cx, int cz, int lod, float viewX, float viewZ, ChunkMesh* out);
 void ChunkMesh_Free(ChunkMesh* chunk);
 
+/* Coarse ground outside the streamed square. Heights are the real field, so
+ * flying there meets the same hills. `outer` is the half-extent in metres. */
+int FarField_Build(float viewX, float viewZ,
+                   float holeX0, float holeX1, float holeZ0, float holeZ1,
+                   float outer, float seam, Mesh* out);
+
 #endif

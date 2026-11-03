@@ -79,6 +79,8 @@ static XrAction g_gripValue = 0;
 static XrAction g_gripClick = 0;
 static XrAction g_pose = 0;
 static XrAction g_haptic = 0;
+static XrAction g_stick = 0;
+static XrAction g_stickClick = 0;
 static XrSpace g_handSpace[2] = { 0, 0 };
 static XrPath g_handPath[2] = { 0, 0 };
 static int g_gripWas[2] = { 0, 0 };
@@ -113,12 +115,13 @@ static int XrOk(const char* what, XrResult result)
     return 0;
 }
 
-static void SuggestProfile(const char* profile, const char* gripSuffix, int gripIsClick)
+static void SuggestProfile(const char* profile, const char* gripSuffix, int gripIsClick,
+                           const char* stickSuffix, const char* stickClickSuffix)
 {
     XrPath profilePath = 0;
     if (!XrOk(profile, xrStringToPath(g_instance, profile, &profilePath))) return;
 
-    XrActionSuggestedBinding binds[8];
+    XrActionSuggestedBinding binds[16];
     int count = 0;
     const char* sides[2] = { "/user/hand/left", "/user/hand/right" };
     for (int i = 0; i < 2; i++) {
@@ -141,6 +144,23 @@ static void SuggestProfile(const char* profile, const char* gripSuffix, int grip
         binds[count].action = g_haptic;
         binds[count].binding = bound;
         count++;
+
+        if (stickSuffix && g_stick) {
+            snprintf(path, sizeof(path), "%s/%s", sides[i], stickSuffix);
+            if (XR_SUCCEEDED(xrStringToPath(g_instance, path, &bound))) {
+                binds[count].action = g_stick;
+                binds[count].binding = bound;
+                count++;
+            }
+        }
+        if (stickClickSuffix && g_stickClick) {
+            snprintf(path, sizeof(path), "%s/%s", sides[i], stickClickSuffix);
+            if (XR_SUCCEEDED(xrStringToPath(g_instance, path, &bound))) {
+                binds[count].action = g_stickClick;
+                binds[count].binding = bound;
+                count++;
+            }
+        }
     }
 
     XrInteractionProfileSuggestedBinding suggested = { XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
@@ -187,13 +207,29 @@ static int CreateActions(void)
     strncpy(action.localizedActionName, "Haptic", sizeof(action.localizedActionName) - 1);
     if (!XrOk("haptic", xrCreateAction(g_actions, &action, &g_haptic))) return 0;
 
-    SuggestProfile("/interaction_profiles/oculus/touch_controller", "input/squeeze/value", 0);
-    SuggestProfile("/interaction_profiles/meta/touch_plus_controller", "input/squeeze/value", 0);
-    SuggestProfile("/interaction_profiles/meta/touch_pro_controller", "input/squeeze/value", 0);
-    SuggestProfile("/interaction_profiles/valve/index_controller", "input/squeeze/value", 0);
-    SuggestProfile("/interaction_profiles/htc/vive_controller", "input/squeeze/click", 1);
-    SuggestProfile("/interaction_profiles/microsoft/motion_controller", "input/squeeze/click", 1);
-    SuggestProfile("/interaction_profiles/khr/simple_controller", "input/select/click", 1);
+    action.actionType = XR_ACTION_TYPE_VECTOR2F_INPUT;
+    strncpy(action.actionName, "thumbstick", sizeof(action.actionName) - 1);
+    strncpy(action.localizedActionName, "Thumbstick", sizeof(action.localizedActionName) - 1);
+    if (!XrOk("thumbstick", xrCreateAction(g_actions, &action, &g_stick))) return 0;
+
+    action.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+    strncpy(action.actionName, "thumbstick_click", sizeof(action.actionName) - 1);
+    strncpy(action.localizedActionName, "Thumbstick Click", sizeof(action.localizedActionName) - 1);
+    if (!XrOk("thumbstick click", xrCreateAction(g_actions, &action, &g_stickClick))) return 0;
+
+    SuggestProfile("/interaction_profiles/oculus/touch_controller", "input/squeeze/value", 0,
+                   "input/thumbstick", "input/thumbstick/click");
+    SuggestProfile("/interaction_profiles/meta/touch_plus_controller", "input/squeeze/value", 0,
+                   "input/thumbstick", "input/thumbstick/click");
+    SuggestProfile("/interaction_profiles/meta/touch_pro_controller", "input/squeeze/value", 0,
+                   "input/thumbstick", "input/thumbstick/click");
+    SuggestProfile("/interaction_profiles/valve/index_controller", "input/squeeze/value", 0,
+                   "input/thumbstick", "input/thumbstick/click");
+    SuggestProfile("/interaction_profiles/htc/vive_controller", "input/squeeze/click", 1,
+                   "input/trackpad", "input/trackpad/click");
+    SuggestProfile("/interaction_profiles/microsoft/motion_controller", "input/squeeze/click", 1,
+                   "input/thumbstick", "input/thumbstick/click");
+    SuggestProfile("/interaction_profiles/khr/simple_controller", "input/select/click", 1, NULL, NULL);
     return 1;
 }
 
@@ -264,7 +300,7 @@ static void DestroyEyes(void)
 static Matrix ProjectionForFov(XrFovf fov)
 {
     const float nearZ = 0.05f;
-    const float farZ = 4000.0f;
+    const float farZ = 18000.0f;
     float left = tanf(fov.angleLeft) * nearZ;
     float right = tanf(fov.angleRight) * nearZ;
     float bottom = tanf(fov.angleDown) * nearZ;
@@ -367,6 +403,22 @@ static void ReadHands(HandInput hands[2])
         hand->grip = grip;
         if (grip && !g_gripWas[i]) Haptic(i);
         g_gripWas[i] = grip;
+
+        if (g_stick) {
+            get.action = g_stick;
+            XrActionStateVector2f stick = { XR_TYPE_ACTION_STATE_VECTOR2F };
+            xrGetActionStateVector2f(g_session, &get, &stick);
+            if (stick.isActive) {
+                hand->stickX = stick.currentState.x;
+                hand->stickY = stick.currentState.y;
+            }
+        }
+        if (g_stickClick) {
+            get.action = g_stickClick;
+            XrActionStateBoolean pressed = { XR_TYPE_ACTION_STATE_BOOLEAN };
+            xrGetActionStateBoolean(g_session, &get, &pressed);
+            hand->stickClick = pressed.isActive && pressed.currentState;
+        }
 
         XrSpaceLocation location = { XR_TYPE_SPACE_LOCATION };
         if (XR_SUCCEEDED(xrLocateSpace(g_handSpace[i], g_space, g_frameState.predictedDisplayTime, &location))) {
