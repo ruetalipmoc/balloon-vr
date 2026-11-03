@@ -12,14 +12,17 @@ static const char GROUND_VS_330[] =
     "in vec3 vertexNormal;\n"
     "in vec4 vertexColor;\n"
     "uniform mat4 mvp;\n"
+    "uniform float uWater;\n"
     "out vec3 vWorld;\n"
     "out vec3 vNormal;\n"
     "out vec4 vCover;\n"
     "void main() {\n"
-    "    vWorld = vertexPosition;\n"
+    "    vec3 p = vertexPosition;\n"
+    "    if (p.y < uWater) p.y = uWater;\n"
+    "    vWorld = p;\n"
     "    vNormal = vertexNormal;\n"
     "    vCover = vertexColor;\n"
-    "    gl_Position = mvp * vec4(vertexPosition, 1.0);\n"
+    "    gl_Position = mvp * vec4(p, 1.0);\n"
     "}\n";
 
 static const char GROUND_VS_100[] =
@@ -30,21 +33,23 @@ static const char GROUND_VS_100[] =
     "attribute vec3 vertexNormal;\n"
     "attribute vec4 vertexColor;\n"
     "uniform mat4 mvp;\n"
+    "uniform float uWater;\n"
     "varying vec3 vWorld;\n"
     "varying vec3 vNormal;\n"
     "varying vec4 vCover;\n"
     "void main() {\n"
-    "    vWorld = vertexPosition;\n"
+    "    vec3 p = vertexPosition;\n"
+    "    if (p.y < uWater) p.y = uWater;\n"
+    "    vWorld = p;\n"
     "    vNormal = vertexNormal;\n"
     "    vCover = vertexColor;\n"
-    "    gl_Position = mvp * vec4(vertexPosition, 1.0);\n"
+    "    gl_Position = mvp * vec4(p, 1.0);\n"
     "}\n";
 
 #define GROUND_FS_BODY \
     "uniform vec4 colDiffuse;\n" \
     "uniform vec2 uEye;\n" \
     "uniform float uWater;\n" \
-    "uniform float uSheet;\n" \
     "const float FIELD = 128.0;\n" \
     "const float BLOCK = 64.0;\n" \
     "float sat(float x) { return clamp(x, 0.0, 1.0); }\n" \
@@ -81,14 +86,9 @@ static const char GROUND_VS_100[] =
     "float shoreAlpha;\n" \
     "vec3 landColor(vec3 world, vec3 nrm, vec4 cover) {\n" \
     "    shoreAlpha = 1.0;\n" \
-    "    if (uSheet > 0.5) {\n" \
-    "        vec3 water = vec3(64.0, 150.0, 196.0) / 255.0;\n" \
-    "        return applyHaze(water, fogAmount(length(world.xz - uEye)));\n" \
-    "    }\n" \
     "    float above = world.y - uWater;\n" \
-    "    float aa = max(fwidth(world.y), 0.001);\n" \
-    "    shoreAlpha = smoothstep(-aa, aa, above);\n" \
-    "    if (shoreAlpha < 0.02) discard;\n" \
+    "    float aa = max(fwidth(world.y), 0.12);\n" \
+    "    float dry = smoothstep(0.0, aa, above);\n" \
     "    float city = sat(cover.r);\n" \
     "    float farm = sat(cover.g);\n" \
     "    float forest = sat(cover.b);\n" \
@@ -125,6 +125,8 @@ static const char GROUND_VS_100[] =
     "    float rockT = sat((0.88 - nrm.y) / 0.30) * highland + sat((0.70 - nrm.y) / 0.28) * (1.0 - sat(farm + city)) * (1.0 - highland);\n" \
     "    c = mix(c, vec3(142.0, 138.0, 128.0) / 255.0, sat(rockT));\n" \
     "    c = mix(c, vec3(236.0, 242.0, 246.0) / 255.0, sat((world.y - 52.0) / 18.0));\n" \
+    "    vec3 water = vec3(64.0, 150.0, 196.0) / 255.0;\n" \
+    "    c = mix(water, c, dry);\n" \
     "    return applyHaze(c, fogAmount(length(world.xz - uEye)));\n" \
     "}\n"
 

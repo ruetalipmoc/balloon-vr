@@ -14,13 +14,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef GL_POLYGON_OFFSET_FILL
-#define GL_POLYGON_OFFSET_FILL 0x8037
-#endif
-extern void glEnable(unsigned int cap);
-extern void glDisable(unsigned int cap);
-extern void glPolygonOffset(float factor, float units);
-
 /* Clipmap rings replace the old chunk slots. */
 #define MAX_PARTICLES 192
 #define MAX_PROPS 768
@@ -61,7 +54,6 @@ struct Scene {
     Material groundMat;
     int locEye;
     int locWater;
-    int locSheet;
     int meshesReady;
 
     Particle particles[MAX_PARTICLES];
@@ -388,14 +380,9 @@ Scene* Scene_Create(void)
     }
     s->locEye = GetShaderLocation(s->groundMat.shader, "uEye");
     s->locWater = GetShaderLocation(s->groundMat.shader, "uWater");
-    s->locSheet = GetShaderLocation(s->groundMat.shader, "uSheet");
     if (s->locWater >= 0) {
         float water = TERRAIN_WATER;
         SetShaderValue(s->groundMat.shader, s->locWater, &water, SHADER_UNIFORM_FLOAT);
-    }
-    if (s->locSheet >= 0) {
-        float sheet = 0.0f;
-        SetShaderValue(s->groundMat.shader, s->locSheet, &sheet, SHADER_UNIFORM_FLOAT);
     }
     s->meshesReady = 1;
 
@@ -1187,47 +1174,9 @@ static void DrawParticles(const Scene* s)
     }
 }
 
-/* Backdrop for every lake and river. It sits a little below the waterline
- * and is pushed back in the depth buffer, so it never ties the bank. The
- * shore itself is a one-pixel fade in the ground shader. */
-static void DrawWaterSheet(const Scene* s)
-{
-    float reach = Terrain_OuterRadius();
-    if (reach < 4000.0f) reach = 4000.0f;
-    float x = s->balloon.x;
-    float z = s->balloon.z;
-    float y = TERRAIN_WATER - 0.35f;
-    if (s->locSheet >= 0) {
-        float sheet = 1.0f;
-        SetShaderValue(s->groundMat.shader, s->locSheet, &sheet, SHADER_UNIFORM_FLOAT);
-    }
-    rlDrawRenderBatchActive();
-    glEnable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(2.0f, 4.0f);
-    BeginShaderMode(s->groundMat.shader);
-    rlDisableBackfaceCulling();
-    rlBegin(RL_QUADS);
-    rlColor4ub(255, 255, 255, 255);
-    rlNormal3f(0.0f, 1.0f, 0.0f);
-    rlTexCoord2f(0.0f, 0.0f);
-    rlVertex3f(x - reach, y, z - reach);
-    rlTexCoord2f(1.0f, 0.0f);
-    rlVertex3f(x - reach, y, z + reach);
-    rlTexCoord2f(1.0f, 1.0f);
-    rlVertex3f(x + reach, y, z + reach);
-    rlTexCoord2f(0.0f, 1.0f);
-    rlVertex3f(x + reach, y, z - reach);
-    rlEnd();
-    rlEnableBackfaceCulling();
-    EndShaderMode();
-    rlDrawRenderBatchActive();
-    glDisable(GL_POLYGON_OFFSET_FILL);
-    if (s->locSheet >= 0) {
-        float sheet = 0.0f;
-        SetShaderValue(s->groundMat.shader, s->locSheet, &sheet, SHADER_UNIFORM_FLOAT);
-    }
-}
-
+/* Backdrop for every lake and river. Submerged vertices are lifted to the
+ * waterline in the ground shader, so the lake is the same surface as the
+ * bank and the two cannot flicker against each other. */
 void Scene_Draw(Scene* s, Vector3 eye)
 {
     UpdateClip(s);
@@ -1250,13 +1199,10 @@ void Scene_Draw(Scene* s, Vector3 eye)
         float eye[2] = { s->balloon.x, s->balloon.z };
         SetShaderValue(s->groundMat.shader, s->locEye, eye, SHADER_UNIFORM_VEC2);
     }
-    DrawWaterSheet(s);
-    BeginBlendMode(BLEND_ALPHA);
     for (int i = CLIP_LEVELS - 1; i >= 0; i--) {
         if (!s->clip[i].ready) continue;
         DrawMesh(s->clip[i].mesh, s->groundMat, MatrixIdentity());
     }
-    EndBlendMode();
     for (int p = 0; p < s->propCount; p++) DrawProp(&s->props[p]);
     /* Clouds are scenery. They must not hide the gondola when the balloon
      * climbs through their layer, or the posts draw on top of a missing floor. */
