@@ -1022,9 +1022,11 @@ static void DrawBasket(const Scene* s)
     Vector3 posts[4] = {
         { -hx, 0, -hz }, { hx, 0, -hz }, { hx, 0, hz }, { -hx, 0, hz }
     };
+    float postBase = 0.10f;
     float postTop = FRAME_Y - 0.025f;
+    float postH = postTop - postBase;
     for (int i = 0; i < 4; i++) {
-        DrawCube((Vector3){ posts[i].x, postTop * 0.5f, posts[i].z }, 0.06f, postTop, 0.06f, wood);
+        DrawCube((Vector3){ posts[i].x, postBase + postH * 0.5f, posts[i].z }, 0.06f, postH, 0.06f, wood);
     }
     DrawCube((Vector3){ 0, FRAME_Y, -hz }, hx * 2.0f, 0.05f, 0.05f, wood);
     DrawCube((Vector3){ 0, FRAME_Y, hz }, hx * 2.0f, 0.05f, 0.05f, wood);
@@ -1253,7 +1255,13 @@ void Scene_Draw(Scene* s, Vector3 eye)
     }
     EndBlendMode();
     for (int p = 0; p < s->propCount; p++) DrawProp(&s->props[p]);
+    /* Clouds are scenery. They must not hide the gondola when the balloon
+     * climbs through their layer, or the posts draw on top of a missing floor. */
+    BeginBlendMode(BLEND_ALPHA);
+    rlDisableDepthMask();
     DrawClouds(&s->balloon);
+    rlEnableDepthMask();
+    EndBlendMode();
     rlPopMatrix();
 
     /* Fabric is a single shell. From the basket the camera looks at the
