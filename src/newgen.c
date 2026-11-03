@@ -434,6 +434,8 @@ void NewGen_Begin(unsigned int seed)
     g_haveCenter = 0;
 #ifdef PLATFORM_WEB
     g_shader = LoadShaderFromMemory(VS_100, FS_100);
+    (void)VS_330;
+    (void)FS_330;
 #else
     g_shader = LoadShaderFromMemory(VS_330, FS_330);
     (void)VS_100;
