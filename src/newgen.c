@@ -340,14 +340,17 @@ static const char* VS_330 =
     "in vec4 vertexColor;\n"
     "uniform mat4 mvp;\n"
     "out vec3 vWorld;\n"
+    "out vec4 vColor;\n"
     "void main() {\n"
     "    vWorld = vertexPosition;\n"
+    "    vColor = vertexColor;\n"
     "    gl_Position = mvp * vec4(vertexPosition, 1.0);\n"
     "}\n";
 
 static const char* FS_330 =
     "#version 330\n"
     "in vec3 vWorld;\n"
+    "in vec4 vColor;\n"
     "out vec4 finalColor;\n"
     "uniform vec2 uEye;\n"
     "uniform float uFog;\n"
@@ -385,6 +388,7 @@ static const char* FS_330 =
     "    c = mix(c, rock, smoothstep(0.18, 0.50, slope));\n"
     "    c = mix(c, snow, smoothstep(52.0, 66.0, h) * (1.0 - smoothstep(0.30, 0.65, slope)));\n"
     "    c = mix(water, c, smoothstep(3.2, 5.4, h));\n"
+    "    c *= vColor.rgb;\n"
     "    float shade = clamp(nrm.y, 0.0, 1.0);\n"
     "    c *= mix(0.58, 1.0, shade * shade);\n"
     "    float dist = length(vWorld.xz - uEye);\n"
@@ -408,8 +412,10 @@ static const char* VS_100 =
     "attribute vec4 vertexColor;\n"
     "uniform mat4 mvp;\n"
     "varying vec3 vWorld;\n"
+    "varying vec4 vColor;\n"
     "void main() {\n"
     "    vWorld = vertexPosition;\n"
+    "    vColor = vertexColor;\n"
     "    gl_Position = mvp * vec4(vertexPosition, 1.0);\n"
     "}\n";
 
@@ -418,6 +424,7 @@ static const char* FS_100 =
     "#extension GL_OES_standard_derivatives : enable\n"
     "precision highp float;\n"
     "varying vec3 vWorld;\n"
+    "varying vec4 vColor;\n"
     "uniform vec2 uEye;\n"
     "uniform float uFog;\n"
     "uniform vec2 uCloud;\n"
@@ -454,6 +461,7 @@ static const char* FS_100 =
     "    c = mix(c, rock, smoothstep(0.18, 0.50, slope));\n"
     "    c = mix(c, snow, smoothstep(52.0, 66.0, h) * (1.0 - smoothstep(0.30, 0.65, slope)));\n"
     "    c = mix(water, c, smoothstep(3.2, 5.4, h));\n"
+    "    c *= vColor.rgb;\n"
     "    float shade = clamp(nrm.y, 0.0, 1.0);\n"
     "    c *= mix(0.58, 1.0, shade * shade);\n"
     "    float dist = length(vWorld.xz - uEye);\n"
@@ -556,6 +564,15 @@ static void FillGrid(float x0, float z0, int n, float s, float* y, int lodEdge)
     }
 }
 
+/* Below the neighbours is a valley, so it goes darker. Above them is a crest. */
+static unsigned char MoistureByte(float h, float avg)
+{
+    float shade = 0.95f - (avg - h) * 0.018f;
+    if (shade < 0.84f) shade = 0.84f;
+    if (shade > 1.0f) shade = 1.0f;
+    return (unsigned char)(shade * 255.0f + 0.5f);
+}
+
 static void BuildChunk(int cx, int cz)
 {
     Sheet* sh = &g_sheet[cz * NG_SIDE + cx];
@@ -586,9 +603,15 @@ static void BuildChunk(int cx, int cz)
             nr[id * 3] = 0.0f;
             nr[id * 3 + 1] = 1.0f;
             nr[id * 3 + 2] = 0.0f;
-            c[id * 4] = 255;
-            c[id * 4 + 1] = 255;
-            c[id * 4 + 2] = 255;
+            int il = i > 0 ? i - 1 : i;
+            int ir = i < n ? i + 1 : i;
+            int jd = j > 0 ? j - 1 : j;
+            int ju = j < n ? j + 1 : j;
+            float avg = (y[j * stride + il] + y[j * stride + ir] + y[jd * stride + i] + y[ju * stride + i]) * 0.25f;
+            unsigned char shade = MoistureByte(y[id], avg);
+            c[id * 4] = shade;
+            c[id * 4 + 1] = shade;
+            c[id * 4 + 2] = shade;
             c[id * 4 + 3] = 255;
             uv[id * 2] = 0.0f;
             uv[id * 2 + 1] = 0.0f;
@@ -612,13 +635,18 @@ static void BuildChunk(int cx, int cz)
     Upload(&sh->mesh, &sh->ready, verts, v, nr, c, uv, idx, ni);
 }
 
-static void PushFine(float* v, int* count, int cap, float x, float y, float z)
+static void PushFine(float* v, unsigned char* col, int* count, int cap,
+                     float x, float y, float z, unsigned char shade)
 {
     if (*count >= cap) return;
     int i = *count;
     v[i * 3] = x;
     v[i * 3 + 1] = y;
     v[i * 3 + 2] = z;
+    col[i * 4] = shade;
+    col[i * 4 + 1] = shade;
+    col[i * 4 + 2] = shade;
+    col[i * 4 + 3] = 255;
     (*count)++;
 }
 
@@ -626,9 +654,11 @@ static void BuildFine(void)
 {
     const int cap = 100000;
     float* pos = (float*)MemAlloc((unsigned int)cap * 3 * sizeof(float));
+    unsigned char* col = (unsigned char*)MemAlloc((unsigned int)cap * 4);
     float* ybuf = (float*)MemAlloc(65 * 65 * sizeof(float));
-    if (!pos || !ybuf) {
+    if (!pos || !col || !ybuf) {
         MemFree(pos);
+        MemFree(col);
         MemFree(ybuf);
         return;
     }
@@ -655,13 +685,14 @@ static void BuildFine(void)
                     float y10 = ybuf[j * stride + i + 1];
                     float y11 = ybuf[(j + 1) * stride + i + 1];
                     float y01 = ybuf[(j + 1) * stride + i];
+                    float avg = (y00 + y10 + y11 + y01) * 0.25f;
                     if (count + 6 > cap) break;
-                    PushFine(pos, &count, cap, x, y00, z);
-                    PushFine(pos, &count, cap, x + s, y11, z + s);
-                    PushFine(pos, &count, cap, x + s, y10, z);
-                    PushFine(pos, &count, cap, x, y00, z);
-                    PushFine(pos, &count, cap, x, y01, z + s);
-                    PushFine(pos, &count, cap, x + s, y11, z + s);
+                    PushFine(pos, col, &count, cap, x, y00, z, MoistureByte(y00, avg));
+                    PushFine(pos, col, &count, cap, x + s, y11, z + s, MoistureByte(y11, avg));
+                    PushFine(pos, col, &count, cap, x + s, y10, z, MoistureByte(y10, avg));
+                    PushFine(pos, col, &count, cap, x, y00, z, MoistureByte(y00, avg));
+                    PushFine(pos, col, &count, cap, x, y01, z + s, MoistureByte(y01, avg));
+                    PushFine(pos, col, &count, cap, x + s, y11, z + s, MoistureByte(y11, avg));
                 }
             }
         }
@@ -669,24 +700,20 @@ static void BuildFine(void)
     MemFree(ybuf);
     if (count < 3) {
         MemFree(pos);
+        MemFree(col);
         ClearMesh(&g_fine, &g_fineReady);
         return;
     }
     float* nr = (float*)MemAlloc((unsigned int)count * 3 * sizeof(float));
-    unsigned char* c = (unsigned char*)MemAlloc((unsigned int)count * 4);
     float* uv = (float*)MemAlloc((unsigned int)count * 2 * sizeof(float));
-    if (!nr || !c || !uv) {
-        MemFree(pos); MemFree(nr); MemFree(c); MemFree(uv);
+    if (!nr || !uv) {
+        MemFree(pos); MemFree(col); MemFree(nr); MemFree(uv);
         return;
     }
     for (int i = 0; i < count; i++) {
         nr[i * 3] = 0.0f;
         nr[i * 3 + 1] = 1.0f;
         nr[i * 3 + 2] = 0.0f;
-        c[i * 4] = 255;
-        c[i * 4 + 1] = 255;
-        c[i * 4 + 2] = 255;
-        c[i * 4 + 3] = 255;
         uv[i * 2] = 0.0f;
         uv[i * 2 + 1] = 0.0f;
     }
@@ -696,7 +723,7 @@ static void BuildFine(void)
     g_fine.triangleCount = count / 3;
     g_fine.vertices = pos;
     g_fine.normals = nr;
-    g_fine.colors = c;
+    g_fine.colors = col;
     g_fine.texcoords = uv;
     UploadMesh(&g_fine, 0);
     g_fineReady = 1;
