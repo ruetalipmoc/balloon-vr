@@ -24,6 +24,7 @@ typedef struct ClipJob {
     float radius;
     float holeL, holeR, holeB, holeT;
     int hasHole;
+    float seamL, seamR, seamB, seamT;
     float boundL, boundR, boundB, boundT;
     int morph;
     float viewX, viewZ;

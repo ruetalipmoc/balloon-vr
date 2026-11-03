@@ -14,13 +14,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef GL_POLYGON_OFFSET_FILL
-#define GL_POLYGON_OFFSET_FILL 0x8037
-#endif
-extern void glEnable(unsigned int cap);
-extern void glDisable(unsigned int cap);
-extern void glPolygonOffset(float factor, float units);
-
 /* Clipmap rings replace the old chunk slots. */
 #define MAX_PARTICLES 192
 #define MAX_PROPS 768
@@ -1199,19 +1192,10 @@ void Scene_Draw(Scene* s, Vector3 eye)
         float eye[2] = { s->balloon.x, s->balloon.z };
         SetShaderValue(s->groundMat.shader, s->locEye, eye, SHADER_UNIFORM_VEC2);
     }
-    rlDrawRenderBatchActive();
-    glEnable(GL_POLYGON_OFFSET_FILL);
     for (int i = CLIP_LEVELS - 1; i >= 0; i--) {
         if (!s->clip[i].ready) continue;
-        /* Coarser rings sit a little further back, so where they overlap
-         * the seam the finer ring wins and the sky cannot show through. */
-        glPolygonOffset(0.0f, (float)(i + 1));
-        rlDrawRenderBatchActive();
         DrawMesh(s->clip[i].mesh, s->groundMat, MatrixIdentity());
     }
-    rlDrawRenderBatchActive();
-    glPolygonOffset(0.0f, 0.0f);
-    glDisable(GL_POLYGON_OFFSET_FILL);
     for (int p = 0; p < s->propCount; p++) DrawProp(&s->props[p]);
     /* Clouds are scenery. They must not hide the gondola when the balloon
      * climbs through their layer, or the posts draw on top of a missing floor. */

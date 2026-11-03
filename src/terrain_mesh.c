@@ -444,26 +444,25 @@ int FarField_Build(float viewX, float viewZ,
 /* Cell count lives in TERRAIN_CLIP_CELLS. Spacing and radius come from
  * Terrain_RingSpacing, so a climb widens every ring without adding vertices. */
 
-/* 0 in the middle of the ring, 1 where it must already be the coarser ring.
- * The factor follows the distance to the basket, not the ring's rectangle,
- * so recentering the window does not slide a band across the ground. */
-static float MorphAlpha(float x, float z, float viewX, float viewZ, float outer,
-                        float edgeDist, float spacing)
+/* 0 at the inner edge of this ring, 1 well before the outer edge.
+ * The outer band is already the coarser surface, so the square where two
+ * rings meet is not a place where the shape or the colour changes. */
+static float MorphAlpha(float x, float z, float viewX, float viewZ, float outer, int level)
 {
     float dx = fabsf(x - viewX);
     float dz = fabsf(z - viewZ);
     float cheb = dx > dz ? dx : dz;
-    float start = outer * 0.42f;
-    float span = outer - start;
-    if (span < 1.0f) span = 1.0f;
-    float a = (cheb - start) / span;
-    if (a < 0.0f) a = 0.0f;
-    if (a > 1.0f) a = 1.0f;
-    a = a * a * (3.0f - 2.0f * a);
-    /* Only the shared edge itself is forced coarse. A wider snap drew a
-     * hard square one cell inside the ring. */
-    if (edgeDist < spacing * 0.2f) a = 1.0f;
-    return a;
+    float u;
+    if (level <= 0) {
+        u = (cheb / outer - 0.15f) / 0.55f;
+    } else {
+        float inner = outer * 0.5f;
+        float t = (cheb - inner) / (outer - inner);
+        u = t / 0.5f;
+    }
+    if (u < 0.0f) u = 0.0f;
+    if (u > 1.0f) u = 1.0f;
+    return u * u * (3.0f - 2.0f * u);
 }
 
 void Clip_Describe(int level, float viewX, float viewZ, ClipJob* job)
@@ -491,8 +490,12 @@ void Clip_Describe(int level, float viewX, float viewZ, ClipJob* job)
         job->holeB = floorf((cz0 - half0) / s + 1.0e-4f) * s;
         job->holeT = ceilf((cz0 + half0) / s - 1.0e-4f) * s;
         job->hasHole = 1;
-        /* Pull the hole in by just over half a cell. The coarser quads then
-         * run under the finer ring, which covers the hairline crack. */
+        job->seamL = job->holeL;
+        job->seamR = job->holeR;
+        job->seamB = job->holeB;
+        job->seamT = job->holeT;
+        /* The coarser quads run a little under the finer ring so a raster
+         * crack cannot show the sky. The underlap is lowered slightly. */
         float tuck = s * 0.55f;
         job->holeL += tuck;
         job->holeR -= tuck;
@@ -535,6 +538,87 @@ static void GridNormal(const float* h, int stride, int i, int j, int n, int m, f
     *nx = dhx / len;
     *ny = 1.0f / len;
     *nz = dhz / len;
+}
+
+static float HSample(const float* h, int stride, int n, int m, int i, int j)
+{
+    if (i < 0) i = 0;
+    if (j < 0) j = 0;
+    if (i > n) i = n;
+    if (j > m) j = m;
+    return h[j * stride + i];
+}
+
+static Color CSample(const Color* c, int stride, int n, int m, int i, int j)
+{
+    if (i < 0) i = 0;
+    if (j < 0) j = 0;
+    if (i > n) i = n;
+    if (j > m) j = m;
+    return c[j * stride + i];
+}
+
+/* Height, cover and normal of the coarser triangle under this vertex.
+ * The fine vertex flattens onto that plane, so the two rings are the same
+ * surface where they meet. */
+static void CoarseSurface(const float* h, const Color* col, int stride, int n, int m,
+                          int ii, int jj, float s, float* hy, Color* c, float* nx, float* ny, float* nz)
+{
+    int ci = ii & ~1;
+    int cj = jj & ~1;
+    float tx = (float)(ii - ci) * 0.5f;
+    float tz = (float)(jj - cj) * 0.5f;
+    float h00 = HSample(h, stride, n, m, ci, cj);
+    float h10 = HSample(h, stride, n, m, ci + 2, cj);
+    float h01 = HSample(h, stride, n, m, ci, cj + 2);
+    float h11 = HSample(h, stride, n, m, ci + 2, cj + 2);
+    Color c00 = CSample(col, stride, n, m, ci, cj);
+    Color c10 = CSample(col, stride, n, m, ci + 2, cj);
+    Color c01 = CSample(col, stride, n, m, ci, cj + 2);
+    Color c11 = CSample(col, stride, n, m, ci + 2, cj + 2);
+
+    float y0, y1, y2;
+    Color k0, k1, k2;
+    float x0, z0, x1, z1, x2, z2;
+    if (tx >= tz) {
+        y0 = h00; y1 = h11; y2 = h10;
+        k0 = c00; k1 = c11; k2 = c10;
+        x0 = 0.0f; z0 = 0.0f; x1 = 1.0f; z1 = 1.0f; x2 = 1.0f; z2 = 0.0f;
+    } else {
+        y0 = h00; y1 = h01; y2 = h11;
+        k0 = c00; k1 = c01; k2 = c11;
+        x0 = 0.0f; z0 = 0.0f; x1 = 0.0f; z1 = 1.0f; x2 = 1.0f; z2 = 1.0f;
+    }
+    float den = (z1 - z2) * (x0 - x2) + (x2 - x1) * (z0 - z2);
+    float w0 = 0.0f, w1 = 0.0f, w2 = 1.0f;
+    if (fabsf(den) > 1.0e-6f) {
+        w0 = ((z1 - z2) * (tx - x2) + (x2 - x1) * (tz - z2)) / den;
+        w1 = ((z2 - z0) * (tx - x2) + (x0 - x2) * (tz - z2)) / den;
+        w2 = 1.0f - w0 - w1;
+    }
+    *hy = y0 * w0 + y1 * w1 + y2 * w2;
+    c->r = (unsigned char)(w0 * k0.r + w1 * k1.r + w2 * k2.r + 0.5f);
+    c->g = (unsigned char)(w0 * k0.g + w1 * k1.g + w2 * k2.g + 0.5f);
+    c->b = (unsigned char)(w0 * k0.b + w1 * k1.b + w2 * k2.b + 0.5f);
+    c->a = (unsigned char)(w0 * k0.a + w1 * k1.a + w2 * k2.a + 0.5f);
+
+    float ex1 = (x1 - x0) * 2.0f * s;
+    float ez1 = (z1 - z0) * 2.0f * s;
+    float ey1 = y1 - y0;
+    float ex2 = (x2 - x0) * 2.0f * s;
+    float ez2 = (z2 - z0) * 2.0f * s;
+    float ey2 = y2 - y0;
+    float nxw = ey1 * ez2 - ey2 * ez1;
+    float nyw = ez1 * ex2 - ez2 * ex1;
+    float nzw = ex1 * ey2 - ex2 * ey1;
+    float len = sqrtf(nxw * nxw + nyw * nyw + nzw * nzw);
+    if (len < 1.0e-5f) {
+        *nx = 0.0f; *ny = 1.0f; *nz = 0.0f;
+    } else if (nyw < 0.0f) {
+        *nx = -nxw / len; *ny = -nyw / len; *nz = -nzw / len;
+    } else {
+        *nx = nxw / len; *ny = nyw / len; *nz = nzw / len;
+    }
 }
 
 int Clip_Build(const ClipJob* job, Mesh* out)
@@ -617,29 +701,17 @@ int Clip_Build(const ClipJob* job, Mesh* out)
                 GridNormal(h, stride, ii, jj, n, m, s, &nx, &ny, &nz);
                 Color c = col[jj * stride + ii];
                 if (job->morph) {
-                    float dxe = wx - job->boundL;
-                    float dxe2 = job->boundR - wx;
-                    if (dxe2 < dxe) dxe = dxe2;
-                    float dze = wz - job->boundB;
-                    float dze2 = job->boundT - wz;
-                    if (dze2 < dze) dze = dze2;
-                    float edgeDist = dxe < dze ? dxe : dze;
-                    float a = MorphAlpha(wx, wz, job->viewX, job->viewZ, job->radius, edgeDist, s);
-                    int ci = ii & ~1;
-                    int cj = jj & ~1;
-                    if (a > 0.0f && (ci != ii || cj != jj)) {
-                        float hy = h[cj * stride + ci];
-                        wx = wx + ((x0 + (float)ci * s) - wx) * a;
-                        wz = wz + ((z0 + (float)cj * s) - wz) * a;
-                        wy = wy + (hy - wy) * a;
+                    float a = MorphAlpha(wx, wz, job->viewX, job->viewZ, job->radius, job->level);
+                    if (a > 0.0f) {
+                        float hy;
                         float cnx, cny, cnz;
-                        GridNormal(h, stride, ci, cj, n, m, s, &cnx, &cny, &cnz);
+                        Color cc;
+                        CoarseSurface(h, col, stride, n, m, ii, jj, s, &hy, &cc, &cnx, &cny, &cnz);
+                        wy = wy + (hy - wy) * a;
                         nx = nx + (cnx - nx) * a;
                         ny = ny + (cny - ny) * a;
                         nz = nz + (cnz - nz) * a;
-                        c = LerpColor(c, col[cj * stride + ci], a);
-                        c.a = (unsigned char)((float)col[jj * stride + ii].a
-                            + ((float)col[cj * stride + ci].a - (float)col[jj * stride + ii].a) * a + 0.5f);
+                        c = LerpColor(c, cc, a);
                         float len = sqrtf(nx * nx + ny * ny + nz * nz);
                         if (len > 1.0e-5f) {
                             nx /= len;
@@ -647,6 +719,10 @@ int Clip_Build(const ClipJob* job, Mesh* out)
                             nz /= len;
                         }
                     }
+                }
+                if (job->hasHole && wx > job->seamL && wx < job->seamR
+                    && wz > job->seamB && wz < job->seamT) {
+                    wy -= 0.04f;
                 }
                 px[k] = wx;
                 py[k] = wy;
