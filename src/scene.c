@@ -66,7 +66,7 @@ struct Scene {
     int meshesReady;
 
     Particle particles[MAX_PARTICLES];
-    Sound burner;
+    AudioStream burner;
     int audioReady;
 };
 
@@ -316,38 +316,46 @@ static Mesh MakeSky(void)
     return MakeFlatMesh(i, v, n, c, uv);
 }
 
+/* The burner used to be a two-second clip. It ended, faded, and started
+ * again, so the roar cut every couple of seconds. This fills the device
+ * from the audio thread, so a slow frame does not open a hole in it. */
+static volatile float s_burnTarget = 0.0f;
+
+static void BurnerFill(void* buffer, unsigned int frames)
+{
+    short* out = (short*)buffer;
+    static unsigned int rng = 0x1234567u;
+    static float phase = 0.0f;
+    static float gain = 0.0f;
+    float target = s_burnTarget;
+    for (unsigned int i = 0; i < frames; i++) {
+        gain += (target - gain) * 0.004f;
+        if (gain < 0.0008f) {
+            gain = 0.0f;
+            out[i] = 0;
+            continue;
+        }
+        rng = rng * 1664525u + 1013904223u;
+        float n = (float)((int)(rng >> 16) % 2000 - 1000) / 1000.0f;
+        phase += 48.0f / 22050.0f;
+        if (phase >= 1.0f) phase -= 1.0f;
+        float rumble = sinf(phase * 2.0f * (float)M_PI) * 0.35f
+                     + sinf(phase * 4.0f * (float)M_PI) * 0.12f;
+        float sample = (rumble + n * 0.28f) * gain * 0.55f;
+        if (sample > 1.0f) sample = 1.0f;
+        if (sample < -1.0f) sample = -1.0f;
+        out[i] = (short)(sample * 28000.0f);
+    }
+}
+
 static void MakeBurnerSound(Scene* s)
 {
     if (!IsAudioDeviceReady()) return;
-    const int rate = 22050;
-    const int frames = rate * 2;
-    short* pcm = (short*)MemAlloc((unsigned int)frames * sizeof(short));
-    if (!pcm) return;
-    unsigned int rng = 0x1234567u;
-    for (int i = 0; i < frames; i++) {
-        rng = rng * 1664525u + 1013904223u;
-        float n = ((int)(rng >> 16) % 2000 - 1000) / 1000.0f;
-        float t = (float)i / (float)rate;
-        float rumble = sinf(2.0f * (float)M_PI * 48.0f * t) * 0.35f
-                     + sinf(2.0f * (float)M_PI * 96.0f * t) * 0.12f;
-        float env = 1.0f;
-        float edge = 0.04f;
-        if (t < edge) env = t / edge;
-        if (t > 2.0f - edge) env = (2.0f - t) / edge;
-        float sample = (rumble + n * 0.28f) * env * 0.55f;
-        if (sample > 1.0f) sample = 1.0f;
-        if (sample < -1.0f) sample = -1.0f;
-        pcm[i] = (short)(sample * 28000.0f);
-    }
-    Wave wave = { 0 };
-    wave.frameCount = (unsigned int)frames;
-    wave.sampleRate = (unsigned int)rate;
-    wave.sampleSize = 16;
-    wave.channels = 1;
-    wave.data = pcm;
-    s->burner = LoadSoundFromWave(wave);
-    UnloadWave(wave);
-    s->audioReady = (s->burner.frameCount > 0);
+    s->burner = LoadAudioStream(22050, 16, 1);
+    if (s->burner.buffer == NULL) return;
+    SetAudioStreamCallback(s->burner, BurnerFill);
+    PlayAudioStream(s->burner);
+    s->audioReady = 1;
 }
 
 /* World-space cover. One texel is the same colour on every ring.
@@ -618,7 +626,10 @@ void Scene_Destroy(Scene* s)
         MemFree(s->coverScratch);
     }
     Watch_Shutdown(&s->watch);
-    if (s->audioReady) UnloadSound(s->burner);
+    if (s->audioReady) {
+        StopAudioStream(s->burner);
+        UnloadAudioStream(s->burner);
+    }
     if (IsAudioDeviceReady()) CloseAudioDevice();
     free(s);
 }
@@ -714,16 +725,8 @@ void Scene_Update(Scene* s, const HandInput hands[2], float dt, int keyBurner, i
     }
     UpdateParticles(s, dt);
 
-    if (dt <= 0.0f) {
-        if (s->audioReady && IsSoundPlaying(s->burner)) StopSound(s->burner);
-    } else if (s->audioReady) {
-        if (s->flame > 0.05f) {
-            SetSoundVolume(s->burner, Clampf(s->flame, 0.0f, 1.0f) * 0.8f);
-            if (!IsSoundPlaying(s->burner)) PlaySound(s->burner);
-        } else if (IsSoundPlaying(s->burner)) {
-            StopSound(s->burner);
-        }
-    }
+    if (dt <= 0.0f) s_burnTarget = 0.0f;
+    else if (s->audioReady) s_burnTarget = (s->flame > 0.05f) ? Clampf(s->flame, 0.0f, 1.0f) * 0.8f : 0.0f;
 
     int force = -1;
     const char* page = getenv("BALLOON_WATCH_PAGE");
@@ -757,6 +760,12 @@ static void UpdateClip(Scene* s)
     float x = s->balloon.x;
     float z = s->balloon.z;
     int rings = Terrain_RingCount();
+    int primed = 0;
+    for (int level = 0; level < rings; level++) {
+        if (s->clip[level].ready) primed = 1;
+    }
+    int budget = primed ? 1 : rings;
+    int built = 0;
     for (int level = 0; level < CLIP_LEVELS; level++) {
         ClipSlot* slot = &s->clip[level];
         if (level >= rings) {
@@ -769,14 +778,16 @@ static void UpdateClip(Scene* s)
         ClipJob job;
         Clip_Describe(level, x, z, &job);
         if (slot->ready && SameJob(&slot->job, &job)) continue;
-        if (slot->ready) {
-            UnloadMesh(slot->mesh);
-            slot->ready = 0;
-        }
-        if (Clip_Build(&job, &slot->mesh)) {
-            slot->ready = 1;
-            slot->job = job;
-        }
+        /* After the first fill, one ring a frame. Rebuilding every ring
+         * on the same cell boundary stalled the picture and the audio. */
+        if (built >= budget) continue;
+        Mesh mesh;
+        if (!Clip_Build(&job, &mesh)) continue;
+        if (slot->ready) UnloadMesh(slot->mesh);
+        slot->mesh = mesh;
+        slot->ready = 1;
+        slot->job = job;
+        built++;
     }
     float snap = 32.0f;
     float px = floorf(x / snap) * snap;
