@@ -270,52 +270,36 @@ static int ParseFloat(const char* s, float* out)
     return 1;
 }
 
-/* "100,200,340,520" — exactly four ascending positive distances. */
-static int ParseLod(const char* s, float d[4])
+static int ParseInt(const char* s, int* out)
 {
-    char buf[128];
-    size_t n = 0;
-    if (!s) return 0;
-    while (s[n] != '\0') {
-        if (n + 1 >= sizeof(buf)) return 0;
-        n++;
-    }
-    memcpy(buf, s, n + 1);
-    int count = 0;
-    char* tok = strtok(buf, ",");
-    while (tok) {
-        while (*tok == ' ') tok++;
-        char* tail = tok + strlen(tok);
-        while (tail > tok && tail[-1] == ' ') *--tail = '\0';
-        if (count >= 4 || !ParseFloat(tok, &d[count]) || !(d[count] > 0.0f)) return 0;
-        count++;
-        tok = strtok(NULL, ",");
-    }
-    if (count != 4) return 0;
-    return d[0] < d[1] && d[1] < d[2] && d[2] < d[3];
+    char* end = NULL;
+    long v;
+    if (!s || !out) return 0;
+    v = strtol(s, &end, 10);
+    if (end == s || (end && *end != '\0')) return 0;
+    *out = (int)v;
+    return 1;
 }
 
 static void PrintUsage(void)
 {
-    printf("balloon-vr [--desktop] [--view METRES] [--lod D0,D1,D2,D3]\n");
+    printf("balloon-vr [--desktop] [--view METRES] [--lod RINGS]\n");
     printf("  Headset: pull the red ceiling handle to burn, the green one to vent.\n");
     printf("  Desktop: mouse look, F/left mouse burns, G/right mouse vents.\n");
-    printf("  --view   How far the ground keeps its colour at %.0f m above\n", TERRAIN_ALT_REF);
-    printf("           the ground (default %.0f, detailed mesh max %.0f).\n",
-           TERRAIN_VIEW_DEFAULT, TERRAIN_VIEW_MAX);
-    printf("           It grows with altitude, and a coarse copy of the real\n");
-    printf("           ground always continues out to the horizon.\n");
-    printf("  --lod    Four ascending distances, in metres, where detail drops\n");
-    printf("           at %.0f m AGL (default 100,200,340,520). They follow the\n", TERRAIN_ALT_REF);
-    printf("           look angle as you climb, so the ground ahead stays fine.\n");
-    printf("           A step narrower than a chunk (64 m) changes more abruptly.\n");
+    printf("  --view   Radius of the finest ring at %.0f m above the ground\n", TERRAIN_ALT_REF);
+    printf("           (default %.0f, range %.0f..%.0f). It grows as you climb\n",
+           TERRAIN_VIEW_DEFAULT, TERRAIN_VIEW_MIN, TERRAIN_VIEW_MAX);
+    printf("           so the ground over the rail keeps the same angle.\n");
+    printf("  --lod    How many rings (default %d, range %d..%d). Each ring is\n",
+           TERRAIN_RINGS_DEFAULT, TERRAIN_RINGS_MIN, TERRAIN_RINGS_MAX);
+    printf("           twice as coarse as the one inside it.\n");
 }
 
 int main(int argc, char** argv)
 {
     int forceDesktop = 0;
     float view = TERRAIN_VIEW_DEFAULT;
-    float lod[4] = { 100.0f, 200.0f, 340.0f, 520.0f };
+    int rings = TERRAIN_RINGS_DEFAULT;
 #ifdef __EMSCRIPTEN__
     forceDesktop = 1;
 #endif
@@ -326,12 +310,12 @@ int main(int argc, char** argv)
             return 0;
         } else if (strcmp(argv[i], "--view") == 0) {
             if (i + 1 >= argc || !ParseFloat(argv[++i], &view) || !(view > 0.0f)) {
-                fprintf(stderr, "bad --view (want metres, e.g. 800)\n");
+                fprintf(stderr, "bad --view (want metres, e.g. 160)\n");
                 return 1;
             }
         } else if (strcmp(argv[i], "--lod") == 0) {
-            if (i + 1 >= argc || !ParseLod(argv[++i], lod)) {
-                fprintf(stderr, "bad --lod (want four ascending metres, e.g. 80,160,300,500)\n");
+            if (i + 1 >= argc || !ParseInt(argv[++i], &rings) || rings < 1) {
+                fprintf(stderr, "bad --lod (want a ring count, e.g. 6)\n");
                 return 1;
             }
         } else {
@@ -341,9 +325,8 @@ int main(int argc, char** argv)
         }
     }
     view = Terrain_SetViewDistance(view);
-    Terrain_SetLodThresholds(lod[0], lod[1], lod[2], lod[3]);
-    printf("view %.0f m   lod %.0f, %.0f, %.0f, %.0f m\n",
-           view, lod[0], lod[1], lod[2], lod[3]);
+    rings = Terrain_SetRingCount(rings);
+    printf("fine ring %.0f m   rings %d\n", view, rings);
 
     const char* pitchEnv = getenv("BALLOON_PITCH");
     if (pitchEnv) g_pitch = strtof(pitchEnv, NULL);
@@ -361,7 +344,7 @@ int main(int argc, char** argv)
     InitWindow(1440, 900, "Balloon VR");
     SetTargetFPS(72);
 #endif
-    rlSetClipPlanes(0.05, 18000.0);
+    rlSetClipPlanes(0.05, Terrain_FarPlane());
     srand(0xB411u);
 
     Scene* scene = Scene_Create();
@@ -422,6 +405,7 @@ int main(int argc, char** argv)
                 mirror.projection = CAMERA_PERSPECTIVE;
                 BeginDrawing();
                 ClearBackground((Color){ 232, 210, 180, 255 });
+                rlSetClipPlanes(0.05, Terrain_FarPlane());
                 BeginMode3D(mirror);
                 Scene_Draw(scene, mirror.position);
                 EndMode3D();
@@ -450,6 +434,7 @@ int main(int argc, char** argv)
 
         BeginDrawing();
         ClearBackground((Color){ 232, 210, 180, 255 });
+        rlSetClipPlanes(0.05, Terrain_FarPlane());
         BeginMode3D(camera);
         Scene_Draw(scene, eye);
         EndMode3D();
@@ -457,11 +442,9 @@ int main(int argc, char** argv)
         DrawPause();
         const Balloon* balloon = Scene_Balloon(scene);
         char hud[160];
-        snprintf(hud, sizeof(hud), "AGL %.0f m    V %+.1f m/s    view %.0f    lod %.0f/%.0f/%.0f/%.0f%s",
+        snprintf(hud, sizeof(hud), "AGL %.0f m    V %+.1f m/s    fine %.0f m    rings %d%s",
                  balloon->altitude - Scene_Ground(scene), balloon->vy,
-                 Terrain_ViewDistance(),
-                 Terrain_LodThreshold(0), Terrain_LodThreshold(1),
-                 Terrain_LodThreshold(2), Terrain_LodThreshold(3),
+                 Terrain_ViewDistance(), Terrain_RingCount(),
                  g_paused ? "    PAUSE" : "");
         DrawText(hud, 16, 16, 20, (Color){ 240, 248, 246, 255 });
         if (shotRequest) SaveScreenshot();

@@ -207,18 +207,11 @@ static float g_baseView = TERRAIN_VIEW_DEFAULT;
 static float g_baseLod[4] = { 100.0f, 200.0f, 340.0f, 520.0f };
 static float g_viewDistance = TERRAIN_VIEW_DEFAULT;
 static float g_lod[4] = { 100.0f, 200.0f, 340.0f, 520.0f };
-
-static float SnapGrown(float grown, float base)
-{
-    if (grown <= base + 0.5f) return base;
-    float s = floorf(grown / 32.0f + 0.5f) * 32.0f;
-    if (s < base) s = base;
-    return s;
-}
+static int g_rings = TERRAIN_RINGS_DEFAULT;
 
 float Terrain_SetViewDistance(float meters)
 {
-    if (meters < TERRAIN_CHUNK_SIZE) meters = TERRAIN_CHUNK_SIZE;
+    if (meters < TERRAIN_VIEW_MIN) meters = TERRAIN_VIEW_MIN;
     if (meters > TERRAIN_VIEW_MAX) meters = TERRAIN_VIEW_MAX;
     g_baseView = meters;
     g_viewDistance = meters;
@@ -230,6 +223,44 @@ float Terrain_ViewDistance(void)
     return g_viewDistance;
 }
 
+int Terrain_SetRingCount(int count)
+{
+    if (count < TERRAIN_RINGS_MIN) count = TERRAIN_RINGS_MIN;
+    if (count > TERRAIN_RINGS_MAX) count = TERRAIN_RINGS_MAX;
+    g_rings = count;
+    return g_rings;
+}
+
+int Terrain_RingCount(void)
+{
+    return g_rings;
+}
+
+float Terrain_RingSpacing(int level)
+{
+    if (level < 0) level = 0;
+    if (level > TERRAIN_RINGS_MAX - 1) level = TERRAIN_RINGS_MAX - 1;
+    float s = g_viewDistance / (float)TERRAIN_CLIP_CELLS;
+    return s * (float)(1 << level);
+}
+
+float Terrain_RingRadius(int level)
+{
+    return Terrain_RingSpacing(level) * (float)TERRAIN_CLIP_CELLS;
+}
+
+float Terrain_OuterRadius(void)
+{
+    return Terrain_RingRadius(g_rings - 1);
+}
+
+float Terrain_FarPlane(void)
+{
+    float far = Terrain_OuterRadius() * 1.35f;
+    if (far < 8000.0f) far = 8000.0f;
+    return far;
+}
+
 void Terrain_SetLodThresholds(float d0, float d1, float d2, float d3)
 {
     g_baseLod[0] = g_lod[0] = d0;
@@ -238,50 +269,24 @@ void Terrain_SetLodThresholds(float d0, float d1, float d2, float d3)
     g_baseLod[3] = g_lod[3] = d3;
 }
 
-/* Horizontal distance at which the ground lies `degrees` under the horizon. */
-static float DistBelowHorizon(float agl, float degrees)
-{
-    float t = tanf(degrees * 0.0174532925f);
-    if (t < 0.05f) t = 0.05f;
-    return agl / t;
-}
-
 void Terrain_ApplyAltitude(float agl)
 {
     if (agl < 0.0f) agl = 0.0f;
-    /* At or below the reference the typed distances are exact. */
-    if (agl <= TERRAIN_ALT_REF) {
-        g_viewDistance = g_baseView;
-        for (int i = 0; i < 4; i++) g_lod[i] = g_baseLod[i];
-        return;
+    /* At or below the reference the typed radius is exact. Above it the
+     * rings grow so the ground past the rail keeps the same angle. The
+     * factor is stepped by 1/8, otherwise every metre of climb would
+     * rebuild a ring. */
+    float q = 1.0f;
+    if (agl > TERRAIN_ALT_REF) {
+        q = agl / TERRAIN_ALT_REF;
+        q = floorf(q * 8.0f + 0.5f) / 8.0f;
+        if (q < 1.0f) q = 1.0f;
     }
-
-    float scale = agl / TERRAIN_ALT_REF;
-    float view = g_baseView * scale;
-    if (view > TERRAIN_VIEW_MAX) view = TERRAIN_VIEW_MAX;
-    g_viewDistance = SnapGrown(view, g_baseView);
-
-    /* Same glance from higher up lands further away, so the mesh has to
-     * stay fine out there or fields and streets turn into big diamonds.
-     * 32° is a look down at the near ground (4 m cells, capped).
-     * 16° is the view over the rail (8 m cells). Past that the cells may
-     * grow, and the colour is flattened so the diagonals do not show. */
-    float want[4] = {
-        DistBelowHorizon(agl, 32.0f),
-        DistBelowHorizon(agl, 16.0f),
-        DistBelowHorizon(agl, 8.0f),
-        DistBelowHorizon(agl, 4.0f)
-    };
-    float cap[4] = { 512.0f, 1280.0f, g_viewDistance, g_viewDistance };
-    for (int i = 0; i < 4; i++) {
-        float d = want[i];
-        if (d < g_baseLod[i]) d = g_baseLod[i];
-        if (d > cap[i]) d = cap[i];
-        g_lod[i] = SnapGrown(d, g_baseLod[i]);
-    }
-    for (int i = 1; i < 4; i++) {
-        if (g_lod[i] <= g_lod[i - 1]) g_lod[i] = g_lod[i - 1] + 32.0f;
-    }
+    float steps = 1.0f;
+    for (int i = 1; i < g_rings; i++) steps *= 2.0f;
+    float radius = g_baseView * q;
+    if (radius * steps > TERRAIN_OUTER_MAX) radius = TERRAIN_OUTER_MAX / steps;
+    g_viewDistance = radius;
 }
 
 float Terrain_LodThreshold(int band)

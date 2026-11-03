@@ -180,7 +180,7 @@ static void TestLodConfig(void)
     CHECK(Terrain_LodForDistance(250.0f) == 4);
 
     float small = Terrain_SetViewDistance(10.0f);
-    CHECK(fabsf(small - TERRAIN_CHUNK_SIZE) < 0.1f);
+    CHECK(fabsf(small - TERRAIN_VIEW_MIN) < 0.1f);
     float huge = Terrain_SetViewDistance(10000.0f);
     CHECK(fabsf(huge - TERRAIN_VIEW_MAX) < 0.1f);
     float back = Terrain_SetViewDistance(TERRAIN_VIEW_DEFAULT);
@@ -195,43 +195,41 @@ static void TestLodConfig(void)
 
 static void TestAltitude(void)
 {
-    Terrain_SetViewDistance(TERRAIN_VIEW_DEFAULT);
-    Terrain_SetLodThresholds(100.0f, 200.0f, 340.0f, 520.0f);
+    Terrain_SetViewDistance(128.0f);
+    Terrain_SetRingCount(8);
 
     Terrain_ApplyAltitude(10.0f);
-    CHECK(fabsf(Terrain_ViewDistance() - TERRAIN_VIEW_DEFAULT) < 0.1f);
-    CHECK(fabsf(Terrain_LodThreshold(0) - 100.0f) < 0.1f);
-    CHECK(Terrain_LodForDistance(90.0f) == 0);
-    CHECK(Terrain_LodForDistance(150.0f) == 1);
+    CHECK(fabsf(Terrain_ViewDistance() - 128.0f) < 0.1f);
+    CHECK(fabsf(Terrain_RingSpacing(0) - 4.0f) < 0.01f);
+    CHECK(Terrain_RingCount() == 8);
 
     Terrain_ApplyAltitude(TERRAIN_ALT_REF);
-    CHECK(fabsf(Terrain_LodThreshold(3) - 520.0f) < 0.1f);
+    CHECK(fabsf(Terrain_ViewDistance() - 128.0f) < 0.1f);
 
+    /* Twice the height, twice the radius, same angle over the rail. */
     Terrain_ApplyAltitude(80.0f);
-    CHECK(Terrain_ViewDistance() > TERRAIN_VIEW_DEFAULT + 32.0f);
-    CHECK(Terrain_LodThreshold(0) > 100.0f);
-    CHECK(Terrain_LodThreshold(1) > Terrain_LodThreshold(0));
-    CHECK(Terrain_LodThreshold(3) > Terrain_LodThreshold(2));
-    CHECK(Terrain_LodForDistance(Terrain_LodThreshold(0) - 1.0f) == 0);
-    CHECK(Terrain_LodForDistance(Terrain_LodThreshold(0) + 1.0f) == 1);
+    CHECK(fabsf(Terrain_ViewDistance() - 256.0f) < 0.1f);
+    CHECK(fabsf(Terrain_RingSpacing(0) - 8.0f) < 0.01f);
+    CHECK(fabsf(Terrain_RingSpacing(1) - 16.0f) < 0.01f);
+    CHECK(fabsf(Terrain_RingRadius(1) - 2.0f * Terrain_RingRadius(0)) < 0.1f);
 
     Terrain_ApplyAltitude(360.0f);
-    CHECK(Terrain_LodThreshold(0) > 400.0f);
-    CHECK(Terrain_LodThreshold(0) <= 512.0f + 0.1f);
-    /* The look over the rail has to stay on the 8 m mesh, or streets and
-     * hedges turn into diamonds. */
-    CHECK(Terrain_LodThreshold(1) > 900.0f);
+    CHECK(fabsf(Terrain_ViewDistance() - 1152.0f) < 1.0f);
 
+    /* The outer ring stops at TERRAIN_OUTER_MAX instead of running away. */
     Terrain_ApplyAltitude(800.0f);
-    CHECK(fabsf(Terrain_ViewDistance() - TERRAIN_VIEW_MAX) < 0.1f);
-    CHECK(Terrain_LodThreshold(0) <= 512.0f + 0.1f);
-    CHECK(Terrain_LodThreshold(1) > Terrain_LodThreshold(0));
-    CHECK(Terrain_LodThreshold(3) >= Terrain_LodThreshold(2));
+    CHECK(Terrain_OuterRadius() <= TERRAIN_OUTER_MAX + 1.0f);
+    CHECK(Terrain_ViewDistance() < 1300.0f);
+    CHECK(Terrain_FarPlane() > Terrain_OuterRadius());
 
-    /* Back to the reference, so later checks see the typed distances. */
+    CHECK(Terrain_SetRingCount(1) == TERRAIN_RINGS_MIN);
+    CHECK(Terrain_SetRingCount(40) == TERRAIN_RINGS_MAX);
+
+    Terrain_SetViewDistance(TERRAIN_VIEW_DEFAULT);
+    Terrain_SetRingCount(TERRAIN_RINGS_DEFAULT);
     Terrain_ApplyAltitude(0.0f);
-    CHECK(fabsf(Terrain_LodThreshold(0) - 100.0f) < 0.1f);
     CHECK(fabsf(Terrain_ViewDistance() - TERRAIN_VIEW_DEFAULT) < 0.1f);
+    CHECK(Terrain_RingCount() == TERRAIN_RINGS_DEFAULT);
 }
 
 int main(void)

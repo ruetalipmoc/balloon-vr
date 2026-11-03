@@ -43,7 +43,6 @@ static const char GROUND_VS_100[] =
 #define GROUND_FS_BODY \
     "uniform vec4 colDiffuse;\n" \
     "uniform vec2 uEye;\n" \
-    "uniform float uView;\n" \
     "uniform float uWater;\n" \
     "uniform float uSheet;\n" \
     "const float FIELD = 128.0;\n" \
@@ -67,17 +66,10 @@ static const char GROUND_VS_100[] =
     "    return vec3(150.0, 156.0, 162.0) / 255.0;\n" \
     "}\n" \
     "float fogAmount(float dist) {\n" \
-    "    float view = max(uView, 64.0);\n" \
-    "    float start = view * 0.22;\n" \
-    "    float span = max(view - start, 1.0);\n" \
-    "    if (dist <= view) {\n" \
-    "        float u = sat((dist - start) / span);\n" \
-    "        float s = u * u * (3.0 - 2.0 * u);\n" \
-    "        return s * 0.72;\n" \
-    "    }\n" \
-    "    float u = sat((dist - view) / (11000.0 - view));\n" \
-    "    float s = u * u * (3.0 - 2.0 * u);\n" \
-    "    return 0.72 + 0.28 * s;\n" \
+    "    float d = max(dist, 0.0);\n" \
+    "    float h = 1.0 - exp(-d / 5200.0);\n" \
+    "    float far = sat((d - 1500.0) / 14000.0);\n" \
+    "    return sat(h * 0.82 + far * far * 0.18);\n" \
     "}\n" \
     "vec3 applyHaze(vec3 c, float fog) {\n" \
     "    vec3 haze = vec3(150.0, 188.0, 214.0) / 255.0;\n" \

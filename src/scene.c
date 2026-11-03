@@ -60,7 +60,6 @@ struct Scene {
     Material material;
     Material groundMat;
     int locEye;
-    int locView;
     int locWater;
     int locSheet;
     int meshesReady;
@@ -388,7 +387,6 @@ Scene* Scene_Create(void)
         s->groundMat.shader = s->material.shader;
     }
     s->locEye = GetShaderLocation(s->groundMat.shader, "uEye");
-    s->locView = GetShaderLocation(s->groundMat.shader, "uView");
     s->locWater = GetShaderLocation(s->groundMat.shader, "uWater");
     s->locSheet = GetShaderLocation(s->groundMat.shader, "uSheet");
     if (s->locWater >= 0) {
@@ -558,15 +556,23 @@ static void UpdateClip(Scene* s)
     Terrain_ApplyAltitude(agl);
     float x = s->balloon.x;
     float z = s->balloon.z;
+    int rings = Terrain_RingCount();
     int anyReady = 0;
     for (int level = 0; level < CLIP_LEVELS; level++) {
         if (s->clip[level].ready) anyReady = 1;
     }
     int built = 0;
     for (int level = 0; level < CLIP_LEVELS; level++) {
+        ClipSlot* slot = &s->clip[level];
+        if (level >= rings) {
+            if (slot->ready) {
+                UnloadMesh(slot->mesh);
+                slot->ready = 0;
+            }
+            continue;
+        }
         ClipJob job;
         Clip_Describe(level, x, z, &job);
-        ClipSlot* slot = &s->clip[level];
         if (slot->ready && SameJob(&slot->job, &job)) continue;
         /* The first frame fills every ring. Afterwards only one ring is
          * rebuilt per frame, so crossing several grid lines does not stall. */
@@ -1186,7 +1192,8 @@ static void DrawParticles(const Scene* s)
  * shore itself is a one-pixel fade in the ground shader. */
 static void DrawWaterSheet(const Scene* s)
 {
-    float reach = 17000.0f;
+    float reach = Terrain_OuterRadius();
+    if (reach < 4000.0f) reach = 4000.0f;
     float x = s->balloon.x;
     float z = s->balloon.z;
     float y = TERRAIN_WATER - 0.35f;
@@ -1242,10 +1249,6 @@ void Scene_Draw(Scene* s, Vector3 eye)
     if (s->locEye >= 0) {
         float eye[2] = { s->balloon.x, s->balloon.z };
         SetShaderValue(s->groundMat.shader, s->locEye, eye, SHADER_UNIFORM_VEC2);
-    }
-    if (s->locView >= 0) {
-        float view = Terrain_ViewDistance();
-        SetShaderValue(s->groundMat.shader, s->locView, &view, SHADER_UNIFORM_FLOAT);
     }
     DrawWaterSheet(s);
     BeginBlendMode(BLEND_ALPHA);

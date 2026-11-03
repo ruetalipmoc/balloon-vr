@@ -441,9 +441,8 @@ int FarField_Build(float viewX, float viewZ,
     return 1;
 }
 
-/* Half-width of every ring, in cells. 32 cells * 4 m = 128 m at the centre,
- * and each coarser ring doubles both the spacing and the reach. */
-#define CLIP_HALF 32
+/* Cell count lives in TERRAIN_CLIP_CELLS. Spacing and radius come from
+ * Terrain_RingSpacing, so a climb widens every ring without adding vertices. */
 
 static float MorphAlpha(float x, float z, float L, float R, float B, float T)
 {
@@ -465,8 +464,9 @@ static float MorphAlpha(float x, float z, float L, float R, float B, float T)
 
 void Clip_Describe(int level, float viewX, float viewZ, ClipJob* job)
 {
-    float s = 4.0f * (float)(1 << level);
-    float half = (float)CLIP_HALF * s;
+    int rings = Terrain_RingCount();
+    float s = Terrain_RingSpacing(level);
+    float half = Terrain_RingRadius(level);
     float cx = floorf(viewX / s) * s;
     float cz = floorf(viewZ / s) * s;
     memset(job, 0, sizeof(*job));
@@ -476,8 +476,8 @@ void Clip_Describe(int level, float viewX, float viewZ, ClipJob* job)
     job->cz = cz;
     job->radius = half;
     if (level > 0) {
-        float s0 = s * 0.5f;
-        float half0 = (float)CLIP_HALF * s0;
+        float s0 = Terrain_RingSpacing(level - 1);
+        float half0 = Terrain_RingRadius(level - 1);
         float cx0 = floorf(viewX / s0) * s0;
         float cz0 = floorf(viewZ / s0) * s0;
         job->holeL = floorf((cx0 - half0) / s + 1.0e-4f) * s;
@@ -486,8 +486,8 @@ void Clip_Describe(int level, float viewX, float viewZ, ClipJob* job)
         job->holeT = ceilf((cz0 + half0) / s - 1.0e-4f) * s;
         job->hasHole = 1;
     }
-    if (level + 1 < CLIP_LEVELS) {
-        float S = s * 2.0f;
+    if (level + 1 < rings) {
+        float S = Terrain_RingSpacing(level + 1);
         job->boundL = floorf((cx - half) / S + 1.0e-4f) * S;
         job->boundR = ceilf((cx + half) / S - 1.0e-4f) * S;
         job->boundB = floorf((cz - half) / S + 1.0e-4f) * S;

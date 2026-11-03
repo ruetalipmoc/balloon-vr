@@ -37,16 +37,20 @@ void Terrain_Normal(float x, float z, float* nx, float* ny, float* nz);
  * poke through the floor. */
 float Terrain_GroundAt(float x, float z);
 
-/* Distance LOD. Grids are nested by halves (16, 8, 4, 2, 1) so a coarse
- * edge is a subset of the fine one. Border samples are snapped onto the
- * coarser edge, and the height everywhere else is the real field, so two
- * tiles that share an edge occupy the same line.
- * Thresholds and the draw distance can be changed from the command line. */
-#define TERRAIN_VIEW_DEFAULT (11.0f * TERRAIN_CHUNK_SIZE)
-#define TERRAIN_VIEW_MAX (24.0f * TERRAIN_CHUNK_SIZE)
+/* `--view` is the radius of the finest ring at TERRAIN_ALT_REF above the
+ * ground. `--lod` is how many rings. Both stay put at or below that height;
+ * higher up the radii grow so the ground over the rail keeps its angle.
+ * The outer ring is capped so the far plane stays finite. */
+#define TERRAIN_VIEW_DEFAULT 128.0f
+#define TERRAIN_VIEW_MIN 64.0f
+#define TERRAIN_VIEW_MAX 512.0f
+#define TERRAIN_RINGS_DEFAULT 8
+#define TERRAIN_RINGS_MIN 3
+#define TERRAIN_RINGS_MAX 8
+#define TERRAIN_CLIP_CELLS 32
+#define TERRAIN_OUTER_MAX 160000.0f
 
-/* `--view` and `--lod` are the distances at this height above the ground.
- * Higher up they stretch so a band stays at the same angle below the horizon. */
+/* `--view` and `--lod` are the values at this height above the ground. */
 #define TERRAIN_ALT_REF 40.0f
 
 int Terrain_LodForDistance(float distMeters);
@@ -57,15 +61,27 @@ int Terrain_GridForLod(int lod);
  * the whole view is what made the frame rate collapse. */
 int Terrain_EffectiveGrid(int cx, int cz, int lod, float viewX, float viewZ);
 
-/* Clamp and store the draw distance used at TERRAIN_ALT_REF. The value
- * actually used this frame may be larger once altitude is applied. */
+/* Clamp and store the finest-ring radius used at TERRAIN_ALT_REF. The
+ * radius actually used this frame may be larger once altitude is applied. */
 float Terrain_SetViewDistance(float meters);
 float Terrain_ViewDistance(void);
 
-/* Four ascending distances, in metres, at TERRAIN_ALT_REF. */
+/* How many nested rings to draw, from 3 to TERRAIN_RINGS_MAX. */
+int Terrain_SetRingCount(int count);
+int Terrain_RingCount(void);
+
+/* Half-extent and cell size of one ring, after altitude scaling. Level 0
+ * is the finest. */
+float Terrain_RingSpacing(int level);
+float Terrain_RingRadius(int level);
+float Terrain_OuterRadius(void);
+float Terrain_FarPlane(void);
+
+/* Chunk distance bands. The clipmap does not use these; `--lod` is the
+ * ring count. */
 void Terrain_SetLodThresholds(float d0, float d1, float d2, float d3);
 
-/* Stretch the stored distances for this height above the ground. */
+/* Grow the ring radii for this height above the ground. */
 void Terrain_ApplyAltitude(float agl);
 
 /* Effective threshold for band 0..3 (after altitude). */

@@ -45,10 +45,10 @@ If no OpenXR runtime is running, the same simulation opens in a window.
 `./balloon-vr --desktop` skips OpenXR entirely.
 
 ```bash
-./balloon-vr --desktop --view 500 --lod 80,160,280,420
+./balloon-vr --desktop --view 160 --lod 6
 ```
 
-`--view` and `--lod` are the distances **at 40 m above the ground**. Climb and they follow the angle under the horizon, so the ground you are looking at stays on an 8 m mesh instead of breaking into large diamonds. The finest 4 m band stops growing around 512 m, and the detailed mesh itself stops at 1536 m. Past that square, a coarser copy of the same ground continues to the horizon, with one flat colour per cell so the diagonals do not show. Descend back to 40 m and the distances return to what you typed. `--lod` defaults to `100,200,340,520`. A step narrower than one chunk (64 m) still joins, but the change is sharper.
+`--view` is the radius of the finest ring at 40 m above the ground (default 128 m). `--lod` is how many rings (default 8): each one is twice as coarse and twice as wide as the one inside it. Climb and every radius grows, stepped by an eighth, so the ground beyond the rail keeps the same angle; at or below 40 m the typed radius is used as-is. The outermost ring stops at 160 km. Blue haze depends only on distance, not on which ring a point falls in.
 
 The stage origin is recentered onto the middle of the basket floor the first
 time a head pose arrives. The basket is about 1.2 m by 1.0 m. Stay inside the
